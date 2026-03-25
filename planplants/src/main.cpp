@@ -2,8 +2,8 @@
 #include <HTTPClient.h>
 #include <WiFi.h>
 
-const char* WIFI_SSID = "";
-const char* WIFI_PASSWORD = "";
+const char* WIFI_SSID = "INFINITUM7180";
+const char* WIFI_PASSWORD = "4ahxH7gKth";
 const char* API_URL = "http://192.168.1.74:8080/echo";
 
 struct MoistureReading {
@@ -45,16 +45,6 @@ void sendReading(const MoistureReading& reading) {
 
   int responseCode = http.POST(payload);
 
-  Serial.print("Sent payload: ");
-  Serial.println(payload);
-  Serial.print("HTTP response code: ");
-  Serial.println(responseCode);
-
-  if (responseCode > 0) {
-    Serial.print("Response body: ");
-    Serial.println(http.getString());
-  }
-
   http.end();
 }
 
@@ -67,12 +57,11 @@ void loop() {
   int value = analogRead(34);
 
   MoistureReading reading = {
-    "plant_1",
+    "soil_sensor_1",
     value,
     millis()
   };
 
-  Serial.println(value);
   Serial.println(createPayload(reading));
   sendReading(reading);
 

@@ -1,12 +1,15 @@
 package main
 
 import (
+	"encoding/csv"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strconv"
+	"sync"
 	"time"
 )
 
@@ -31,6 +34,8 @@ type testingLogs struct {
 	Value       int    `json:"value"`
 	Timestamp   uint64 `json:"timestamp"`
 }
+
+var csvMu sync.Mutex
 
 func main() {
 	addr := ":8080"
@@ -66,6 +71,8 @@ func echoHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	defer r.Body.Close()
+
 	var payload testingLogs
 
 	err := json.NewDecoder(r.Body).Decode(&payload)
@@ -74,14 +81,15 @@ func echoHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Print to console
-	fmt.Printf("Payload: %+v\n", payload)
+	if err := appendTestingLogCSV(payload); err != nil {
+		log.Printf("csv write error: %v", err)
+		http.Error(w, "failed to store log", http.StatusInternalServerError)
+		return
+	}
 
-	// Echo back
 	writeJSON(w, http.StatusOK, healthResponse{
 		Status: "ok",
 	})
-
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
@@ -135,6 +143,48 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	if err := json.NewEncoder(w).Encode(value); err != nil {
 		log.Printf("write json error: %v", err)
 	}
+}
+
+func appendTestingLogCSV(entry testingLogs) error {
+	csvMu.Lock()
+	defer csvMu.Unlock()
+
+	const csvPath = "data/calibration_soil_sensor_logs_dry_soil1.csv"
+
+	if err := os.MkdirAll(filepath.Dir(csvPath), 0o755); err != nil {
+		return err
+	}
+
+	file, err := os.OpenFile(csvPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil {
+		return err
+	}
+
+	writer := csv.NewWriter(file)
+	if info.Size() == 0 {
+		if err := writer.Write([]string{"sensor_label", "value", "timestamp"}); err != nil {
+			return err
+		}
+	}
+
+	record := []string{
+		entry.SensorLabel,
+		strconv.Itoa(entry.Value),
+		strconv.FormatUint(entry.Timestamp, 10),
+	}
+
+	if err := writer.Write(record); err != nil {
+		return err
+	}
+
+	writer.Flush()
+	return writer.Error()
 }
 
 func loggingMiddleware(next http.Handler) http.Handler {
