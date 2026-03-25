@@ -1,0 +1,49 @@
+# Go
+bin/
+dist/
+build/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.out
+cover.out
+
+# Go workspace
+go.work.sum
+
+# Arduino CLI / IDE
+*.elf
+*.hex
+*.bin
+*.map
+*.eep
+*.ino.cpp
+*.ino.cpp.d
+
+# Arduino local build directories
+arduino_build/
+build-*/
+.arduino15/
+.arduinoIDE/
+
+# Logs
+*.log
+
+# Environment files
+.env
+.env.*
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db

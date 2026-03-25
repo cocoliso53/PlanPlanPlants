@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -25,6 +26,12 @@ type createPlantResponse struct {
 	Message string `json:"message"`
 }
 
+type testingLogs struct {
+	SensorLabel string `json:"sensorLabel"`
+	Value       int    `json:"value"`
+	Timestamp   uint64 `json:"timestamp"`
+}
+
 func main() {
 	addr := ":8080"
 	if port := os.Getenv("PORT"); port != "" {
@@ -35,6 +42,7 @@ func main() {
 	mux.HandleFunc("/", rootHandler)
 	mux.HandleFunc("/health", healthHandler)
 	mux.HandleFunc("/plants", createPlantHandler)
+	mux.HandleFunc("/echo", echoHandler)
 
 	server := &http.Server{
 		Addr:    addr,
@@ -50,6 +58,30 @@ func main() {
 func rootHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("PlanPlanPlants server\n"))
+}
+
+func echoHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var payload testingLogs
+
+	err := json.NewDecoder(r.Body).Decode(&payload)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Print to console
+	fmt.Printf("Payload: %+v\n", payload)
+
+	// Echo back
+	writeJSON(w, http.StatusOK, healthResponse{
+		Status: "ok",
+	})
+
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
