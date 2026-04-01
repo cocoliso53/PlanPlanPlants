@@ -1,69 +1,95 @@
 #include <Arduino.h>
-#include <HTTPClient.h>
-#include <WiFi.h>
+#include <BH1750.h>
+#include <Wire.h>
 
-const char* WIFI_SSID = "INFINITUM7180";
-const char* WIFI_PASSWORD = "4ahxH7gKth";
-const char* API_URL = "http://192.168.1.74:8080/echo";
+constexpr uint8_t SDA_PIN = 21;
+constexpr uint8_t SCL_PIN = 22;
+BH1750 lightMeter;
+bool sensorReady = false;
+unsigned long readCount = 0;
+unsigned long failedReadCount = 0;
 
-struct MoistureReading {
-  const char* sensorLabel;
-  int value;
-  unsigned long timestamp;
-};
+void scanI2CBus() {
+  Serial.println("Scanning I2C bus...");
 
-String createPayload(const MoistureReading& reading) {
-  return "{\"sensorLabel\":\"" + String(reading.sensorLabel) +
-         "\",\"value\":" + String(reading.value) +
-         ",\"timestamp\":" + String(reading.timestamp) + "}";
-}
-
-void connectToWifi() {
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-
-  Serial.print("Connecting to WiFi");
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
+  for (uint8_t address = 1; address < 127; address++) {
+    Wire.beginTransmission(address);
+    if (Wire.endTransmission() == 0) {
+      Serial.print("Found device at 0x");
+      if (address < 16) {
+        Serial.print("0");
+      }
+      Serial.println(address, HEX);
+    }
   }
-
-  Serial.println();
-  Serial.println("WiFi connected");
-}
-
-void sendReading(const MoistureReading& reading) {
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("WiFi not connected");
-    return;
-  }
-
-  HTTPClient http;
-  String payload = createPayload(reading);
-
-  http.begin(API_URL);
-  http.addHeader("Content-Type", "application/json");
-
-  int responseCode = http.POST(payload);
-
-  http.end();
 }
 
 void setup() {
   Serial.begin(115200);
-  connectToWifi();
+  delay(1000);
+
+  Wire.begin(SDA_PIN, SCL_PIN);
+
+  Serial.println("GY-302 / BH1750 debug test");
+  Serial.print("SDA pin: ");
+  Serial.println(SDA_PIN);
+  Serial.print("SCL pin: ");
+  Serial.println(SCL_PIN);
+
+  scanI2CBus();
+
+  sensorReady = lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE, 0x23, &Wire);
+
+  if (sensorReady) {
+    Serial.println("BH1750 ready at address 0x23");
+    return;
+  }
+
+  sensorReady = lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE, 0x5C, &Wire);
+
+  if (sensorReady) {
+    Serial.println("BH1750 ready at address 0x5C");
+    return;
+  }
+
+  if (!sensorReady) {
+    Serial.println("BH1750 init failed. Check wiring, power, and I2C address.");
+    return;
+  }
 }
 
 void loop() {
-  int value = analogRead(34);
+  readCount++;
 
-  MoistureReading reading = {
-    "soil_sensor_1",
-    value,
-    millis()
-  };
+  Serial.println("---");
+  Serial.print("Read #");
+  Serial.println(readCount);
 
-  Serial.println(createPayload(reading));
-  sendReading(reading);
+  if (!sensorReady) {
+    failedReadCount++;
+    Serial.print("Sensor not ready. Failed reads: ");
+    Serial.println(failedReadCount);
+    delay(2000);
+    return;
+  }
 
-  delay(3000);
+  float lux = lightMeter.readLightLevel();
+
+  if (lux < 0) {
+    failedReadCount++;
+    Serial.println("Failed to read lux value from BH1750");
+    Serial.print("Failed reads: ");
+    Serial.println(failedReadCount);
+    delay(2000);
+    return;
+  }
+
+  Serial.print("Light: ");
+  Serial.print(lux);
+  Serial.println(" lx");
+
+  Serial.print("Failed reads so far: ");
+  Serial.println(failedReadCount);
+
+  delay(2000);
 }
