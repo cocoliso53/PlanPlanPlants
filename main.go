@@ -13,18 +13,6 @@ type healthResponse struct {
 	Status string `json:"status"`
 }
 
-type createPlantRequest struct {
-	Name  string `json:"name"`
-	Water string `json:"water"`
-}
-
-type createPlantResponse struct {
-	ID      int    `json:"id"`
-	Name    string `json:"name"`
-	Water   string `json:"water"`
-	Message string `json:"message"`
-}
-
 type testingLogs struct {
 	Moist1    int    `json:"moist1"`
 	Temp      int    `json:"temp"`
@@ -48,7 +36,6 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", rootHandler)
 	mux.HandleFunc("/health", healthHandler)
-	mux.HandleFunc("/plants", createPlantHandler)
 	mux.HandleFunc("/echo", echoHandler)
 
 	server := &http.Server{
@@ -111,39 +98,6 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, healthResponse{
 		Status: "ok",
-	})
-}
-
-func createPlantHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
-		return
-	}
-
-	defer r.Body.Close()
-
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
-	if err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	var req createPlantRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		http.Error(w, "invalid json body", http.StatusBadRequest)
-		return
-	}
-
-	if req.Name == "" {
-		http.Error(w, "name is required", http.StatusBadRequest)
-		return
-	}
-
-	writeJSON(w, http.StatusCreated, createPlantResponse{
-		ID:      1,
-		Name:    req.Name,
-		Water:   req.Water,
-		Message: "plant created",
 	})
 }
 
