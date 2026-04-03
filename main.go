@@ -1,15 +1,11 @@
 package main
 
 import (
-	"encoding/csv"
 	"encoding/json"
 	"io"
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
-	"strconv"
-	"sync"
 	"time"
 )
 
@@ -30,12 +26,18 @@ type createPlantResponse struct {
 }
 
 type testingLogs struct {
-	SensorLabel string `json:"sensorLabel"`
-	Value       int    `json:"value"`
-	Timestamp   uint64 `json:"timestamp"`
+	Moist1    int    `json:"moist1"`
+	Temp      int    `json:"temp"`
+	Humidity  int    `json:"humidity"`
+	Lux       int    `json:"lux"`
+	Timestamp uint64 `json:"timestamp"`
 }
 
-var csvMu sync.Mutex
+type echoResponse struct {
+	Status  string              `json:"status"`
+	Params  map[string][]string `json:"params"`
+	Payload testingLogs         `json:"payload"`
+}
 
 func main() {
 	addr := ":8080"
@@ -73,22 +75,31 @@ func echoHandler(w http.ResponseWriter, r *http.Request) {
 
 	defer r.Body.Close()
 
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
 	var payload testingLogs
 
-	err := json.NewDecoder(r.Body).Decode(&payload)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	if err := json.Unmarshal(body, &payload); err != nil {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
 		return
 	}
 
-	if err := appendTestingLogCSV(payload); err != nil {
-		log.Printf("csv write error: %v", err)
-		http.Error(w, "failed to store log", http.StatusInternalServerError)
-		return
-	}
+	params := r.URL.Query()
+	log.Printf(
+		"echo request params=%v payload=%+v raw=%s",
+		params,
+		payload,
+		string(body),
+	)
 
-	writeJSON(w, http.StatusOK, healthResponse{
-		Status: "ok",
+	writeJSON(w, http.StatusOK, echoResponse{
+		Status:  "ok",
+		Params:  params,
+		Payload: payload,
 	})
 }
 
@@ -143,48 +154,6 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	if err := json.NewEncoder(w).Encode(value); err != nil {
 		log.Printf("write json error: %v", err)
 	}
-}
-
-func appendTestingLogCSV(entry testingLogs) error {
-	csvMu.Lock()
-	defer csvMu.Unlock()
-
-	const csvPath = "data/calibration_soil_sensor_logs_dry_soil1.csv"
-
-	if err := os.MkdirAll(filepath.Dir(csvPath), 0o755); err != nil {
-		return err
-	}
-
-	file, err := os.OpenFile(csvPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	info, err := file.Stat()
-	if err != nil {
-		return err
-	}
-
-	writer := csv.NewWriter(file)
-	if info.Size() == 0 {
-		if err := writer.Write([]string{"sensor_label", "value", "timestamp"}); err != nil {
-			return err
-		}
-	}
-
-	record := []string{
-		entry.SensorLabel,
-		strconv.Itoa(entry.Value),
-		strconv.FormatUint(entry.Timestamp, 10),
-	}
-
-	if err := writer.Write(record); err != nil {
-		return err
-	}
-
-	writer.Flush()
-	return writer.Error()
 }
 
 func loggingMiddleware(next http.Handler) http.Handler {
