@@ -13,22 +13,37 @@ type healthResponse struct {
 	Status string `json:"status"`
 }
 
+type ResultReady = bool
+
 type testingLogs struct {
-	Moist1    int    `json:"moist1"`
-	Temp      int    `json:"temp"`
-	Humidity  int    `json:"humidity"`
-	Lux       int    `json:"lux"`
-	Timestamp uint64 `json:"timestamp"`
+	Moist1    int     `json:"moist1"`
+	Temp      float64 `json:"temp"`
+	Humidity  float64 `json:"humidity"`
+	Lux       float64 `json:"lux"`
+	Timestamp uint64  `json:"timestamp"`
+}
+
+type testingLogsAvg struct {
+	AvgMoist1   float64 `json:"moist1"`
+	AvgTemp     float64 `json:"temp"`
+	AvgHumidity float64 `json:"humidity"`
+	AvgLux      float64 `json:"lux"`
+	Timestamp   int64   `json:"timestamp"`
+}
+
+type testingLogsSlice struct {
+	s []testingLogs
 }
 
 type echoResponse struct {
 	Status  string              `json:"status"`
 	Params  map[string][]string `json:"params"`
-	Payload testingLogs         `json:"payload"`
+	Payload testingLogsAvg      `json:"payload"`
 }
 
 func main() {
 	addr := ":8080"
+	readings := make([]testingLogs, 0, 5)
 	if port := os.Getenv("PORT"); port != "" {
 		addr = ":" + port
 	}
@@ -88,6 +103,44 @@ func echoHandler(w http.ResponseWriter, r *http.Request) {
 		Params:  params,
 		Payload: payload,
 	})
+}
+
+func (r *testingLogsSlice) averageReadingData(latestReading testingLogs) (testingLogsAvg, ResultReady) {
+	// let's take the average of 5 readings
+	maxLen := 5.0
+
+	r.s = append(r.s, latestReading)
+
+	if len(r.s) == int(maxLen) {
+		var avgMoist1 float64
+		var avgTemp float64
+		var avgHumidity float64
+		var avgLux float64
+
+		for _, item := range r.s {
+			avgMoist1 += float64(item.Moist1)
+			avgTemp += item.Temp
+			avgHumidity += item.Humidity
+			avgLux += item.Lux
+		}
+
+		// reset to empty slice
+		r.s = r.s[:0]
+
+		return testingLogsAvg{
+			AvgMoist1:   avgMoist1 / maxLen,
+			AvgTemp:     avgTemp / maxLen,
+			AvgHumidity: avgHumidity / maxLen,
+			AvgLux:      avgLux / maxLen,
+			Timestamp:   time.Now().Unix(),
+		}, false
+	} else {
+		return testingLogsAvg{}, false
+	}
+}
+
+func averageReadingsDataHandler(readings *[]testingLogs, w http.ResponseWriter, r *http.Request) {
+
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
