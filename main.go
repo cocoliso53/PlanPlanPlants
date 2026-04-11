@@ -38,12 +38,15 @@ type testingLogsSlice struct {
 type echoResponse struct {
 	Status  string              `json:"status"`
 	Params  map[string][]string `json:"params"`
-	Payload testingLogsAvg      `json:"payload"`
+	Payload testingLogs         `json:"payload"`
 }
 
 func main() {
 	addr := ":8080"
-	readings := make([]testingLogs, 0, 5)
+	readings := testingLogsSlice{
+		s: make([]testingLogs, 0, 5),
+	}
+
 	if port := os.Getenv("PORT"); port != "" {
 		addr = ":" + port
 	}
@@ -52,6 +55,9 @@ func main() {
 	mux.HandleFunc("/", rootHandler)
 	mux.HandleFunc("/health", healthHandler)
 	mux.HandleFunc("/echo", echoHandler)
+	mux.HandleFunc("/readings", func(w http.ResponseWriter, r *http.Request) {
+		averageReadingsDataHandler(&readings, w, r)
+	})
 
 	server := &http.Server{
 		Addr:    addr,
@@ -133,13 +139,40 @@ func (r *testingLogsSlice) averageReadingData(latestReading testingLogs) (testin
 			AvgHumidity: avgHumidity / maxLen,
 			AvgLux:      avgLux / maxLen,
 			Timestamp:   time.Now().Unix(),
-		}, false
+		}, true
 	} else {
 		return testingLogsAvg{}, false
 	}
 }
 
-func averageReadingsDataHandler(readings *[]testingLogs, w http.ResponseWriter, r *http.Request) {
+func averageReadingsDataHandler(readings *testingLogsSlice, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+
+	defer r.Body.Close()
+
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	var reading testingLogs
+
+	if err := json.Unmarshal(body, &reading); err != nil {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+
+	result, ready := readings.averageReadingData(reading)
+	if ready {
+		// here we need to add it to the db
+		writeJSON(w, http.StatusCreated, result)
+	} else {
+		w.WriteHeader(http.StatusNoContent)
+	}
 
 }
 
