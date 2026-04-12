@@ -1,12 +1,15 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"time"
+
+	_ "modernc.org/sqlite"
 )
 
 type healthResponse struct {
@@ -46,6 +49,24 @@ func main() {
 	readings := testingLogsSlice{
 		s: make([]testingLogs, 0, 5),
 	}
+	db, err := sql.Open("sqlite", "data/planplants.db")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS average_readings (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			moist1 REAL NOT NULL,
+			temp REAL NOT NULL,
+			humidity REAL NOT NULL,
+			lux REAL NOT NULL,
+			timestamp INTEGER NOT NULL
+		)
+	`); err != nil {
+		log.Fatal(err)
+	}
 
 	if port := os.Getenv("PORT"); port != "" {
 		addr = ":" + port
@@ -56,7 +77,7 @@ func main() {
 	mux.HandleFunc("/health", healthHandler)
 	mux.HandleFunc("/echo", echoHandler)
 	mux.HandleFunc("/readings", func(w http.ResponseWriter, r *http.Request) {
-		averageReadingsDataHandler(&readings, w, r)
+		averageReadingsDataHandler(db, &readings, w, r)
 	})
 
 	server := &http.Server{
@@ -145,7 +166,7 @@ func (r *testingLogsSlice) averageReadingData(latestReading testingLogs) (testin
 	}
 }
 
-func averageReadingsDataHandler(readings *testingLogsSlice, w http.ResponseWriter, r *http.Request) {
+func averageReadingsDataHandler(db *sql.DB, readings *testingLogsSlice, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
@@ -168,7 +189,17 @@ func averageReadingsDataHandler(readings *testingLogsSlice, w http.ResponseWrite
 
 	result, ready := readings.averageReadingData(reading)
 	if ready {
-		// here we need to add it to the db
+		if _, err := db.Exec(
+			`INSERT INTO average_readings (moist1, temp, humidity, lux, timestamp) VALUES (?, ?, ?, ?, ?)`,
+			result.AvgMoist1,
+			result.AvgTemp,
+			result.AvgHumidity,
+			result.AvgLux,
+			result.Timestamp,
+		); err != nil {
+			http.Error(w, "failed to store average reading", http.StatusInternalServerError)
+			return
+		}
 		writeJSON(w, http.StatusCreated, result)
 	} else {
 		w.WriteHeader(http.StatusNoContent)
