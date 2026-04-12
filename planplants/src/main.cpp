@@ -17,9 +17,9 @@ constexpr uint8_t SCL_PIN = 22;
 
 struct TestingLogs {
   int moist1;
-  int temp;
-  int humidity;
-  int lux;
+  float temp;
+  float humidity;
+  float lux;
   uint64_t timestamp;
 };
 
@@ -58,9 +58,9 @@ void connectToWifi() {
 
 String createPayload(const TestingLogs& logs) {
   return "{\"moist1\":" + String(logs.moist1) +
-         ",\"temp\":" + String(logs.temp) +
-         ",\"humidity\":" + String(logs.humidity) +
-         ",\"lux\":" + String(logs.lux) +
+         ",\"temp\":" + String(logs.temp, 2) +
+         ",\"humidity\":" + String(logs.humidity, 2) +
+         ",\"lux\":" + String(logs.lux, 2) +
          ",\"timestamp\":" + String((unsigned long long) logs.timestamp) + "}";
 }
 
@@ -171,9 +171,9 @@ void loop() {
   if (dhtOk && luxValue >= 0) {
     TestingLogs logs = {
       moistureValue,
-      static_cast<int>(temperatureC),
-      static_cast<int>(humidity),
-      static_cast<int>(luxValue),
+      temperatureC,
+      humidity,
+      luxValue,
       static_cast<uint64_t>(millis())
     };
 

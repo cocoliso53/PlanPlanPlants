@@ -1,36 +1,41 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"time"
+
+	_ "modernc.org/sqlite"
 )
 
 type healthResponse struct {
 	Status string `json:"status"`
 }
 
-type createPlantRequest struct {
-	Name  string `json:"name"`
-	Water string `json:"water"`
-}
-
-type createPlantResponse struct {
-	ID      int    `json:"id"`
-	Name    string `json:"name"`
-	Water   string `json:"water"`
-	Message string `json:"message"`
-}
+type ResultReady = bool
 
 type testingLogs struct {
-	Moist1    int    `json:"moist1"`
-	Temp      int    `json:"temp"`
-	Humidity  int    `json:"humidity"`
-	Lux       int    `json:"lux"`
-	Timestamp uint64 `json:"timestamp"`
+	Moist1    int     `json:"moist1"`
+	Temp      float64 `json:"temp"`
+	Humidity  float64 `json:"humidity"`
+	Lux       float64 `json:"lux"`
+	Timestamp uint64  `json:"timestamp"`
+}
+
+type testingLogsAvg struct {
+	AvgMoist1   float64 `json:"moist1"`
+	AvgTemp     float64 `json:"temp"`
+	AvgHumidity float64 `json:"humidity"`
+	AvgLux      float64 `json:"lux"`
+	Timestamp   int64   `json:"timestamp"`
+}
+
+type testingLogsSlice struct {
+	s []testingLogs
 }
 
 type echoResponse struct {
@@ -41,6 +46,28 @@ type echoResponse struct {
 
 func main() {
 	addr := ":8080"
+	readings := testingLogsSlice{
+		s: make([]testingLogs, 0, 5),
+	}
+	db, err := sql.Open("sqlite", "data/planplants.db")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS average_readings (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			moist1 REAL NOT NULL,
+			temp REAL NOT NULL,
+			humidity REAL NOT NULL,
+			lux REAL NOT NULL,
+			timestamp INTEGER NOT NULL
+		)
+	`); err != nil {
+		log.Fatal(err)
+	}
+
 	if port := os.Getenv("PORT"); port != "" {
 		addr = ":" + port
 	}
@@ -48,8 +75,10 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", rootHandler)
 	mux.HandleFunc("/health", healthHandler)
-	mux.HandleFunc("/plants", createPlantHandler)
 	mux.HandleFunc("/echo", echoHandler)
+	mux.HandleFunc("/readings", func(w http.ResponseWriter, r *http.Request) {
+		averageReadingsDataHandler(db, &readings, w, r)
+	})
 
 	server := &http.Server{
 		Addr:    addr,
@@ -103,18 +132,41 @@ func echoHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func healthHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
-		return
-	}
+func (r *testingLogsSlice) averageReadingData(latestReading testingLogs) (testingLogsAvg, ResultReady) {
+	// let's take the average of 5 readings
+	maxLen := 5.0
 
-	writeJSON(w, http.StatusOK, healthResponse{
-		Status: "ok",
-	})
+	r.s = append(r.s, latestReading)
+
+	if len(r.s) == int(maxLen) {
+		var avgMoist1 float64
+		var avgTemp float64
+		var avgHumidity float64
+		var avgLux float64
+
+		for _, item := range r.s {
+			avgMoist1 += float64(item.Moist1)
+			avgTemp += item.Temp
+			avgHumidity += item.Humidity
+			avgLux += item.Lux
+		}
+
+		// reset to empty slice
+		r.s = r.s[:0]
+
+		return testingLogsAvg{
+			AvgMoist1:   avgMoist1 / maxLen,
+			AvgTemp:     avgTemp / maxLen,
+			AvgHumidity: avgHumidity / maxLen,
+			AvgLux:      avgLux / maxLen,
+			Timestamp:   time.Now().Unix(),
+		}, true
+	} else {
+		return testingLogsAvg{}, false
+	}
 }
 
-func createPlantHandler(w http.ResponseWriter, r *http.Request) {
+func averageReadingsDataHandler(db *sql.DB, readings *testingLogsSlice, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
@@ -128,22 +180,41 @@ func createPlantHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req createPlantRequest
-	if err := json.Unmarshal(body, &req); err != nil {
+	var reading testingLogs
+
+	if err := json.Unmarshal(body, &reading); err != nil {
 		http.Error(w, "invalid json body", http.StatusBadRequest)
 		return
 	}
 
-	if req.Name == "" {
-		http.Error(w, "name is required", http.StatusBadRequest)
+	result, ready := readings.averageReadingData(reading)
+	if ready {
+		if _, err := db.Exec(
+			`INSERT INTO average_readings (moist1, temp, humidity, lux, timestamp) VALUES (?, ?, ?, ?, ?)`,
+			result.AvgMoist1,
+			result.AvgTemp,
+			result.AvgHumidity,
+			result.AvgLux,
+			result.Timestamp,
+		); err != nil {
+			http.Error(w, "failed to store average reading", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusCreated, result)
+	} else {
+		w.WriteHeader(http.StatusNoContent)
+	}
+
+}
+
+func healthHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, createPlantResponse{
-		ID:      1,
-		Name:    req.Name,
-		Water:   req.Water,
-		Message: "plant created",
+	writeJSON(w, http.StatusOK, healthResponse{
+		Status: "ok",
 	})
 }
 
