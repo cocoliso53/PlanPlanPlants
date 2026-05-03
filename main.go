@@ -59,18 +59,7 @@ func main() {
 	}
 	defer db.Close()
 
-	if _, err := db.Exec(`
-		CREATE TABLE IF NOT EXISTS average_readings (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			moist1 REAL NOT NULL,
-			moist2 REAL NOT NULL,
-			temp REAL NOT NULL,
-			humidity REAL NOT NULL,
-			lux1 REAL NOT NULL,
-			lux2 REAL NOT NULL,
-			timestamp INTEGER NOT NULL
-		)
-	`); err != nil {
+	if err := ensureAverageReadingsTable(db); err != nil {
 		log.Fatal(err)
 	}
 
@@ -219,6 +208,67 @@ func averageReadingsDataHandler(db *sql.DB, readings *testingLogsSlice, w http.R
 		w.WriteHeader(http.StatusNoContent)
 	}
 
+}
+
+func ensureAverageReadingsTable(db *sql.DB) error {
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS average_readings (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			moist1 REAL NOT NULL,
+			moist2 REAL NOT NULL DEFAULT 0,
+			temp REAL NOT NULL,
+			humidity REAL NOT NULL,
+			lux1 REAL NOT NULL DEFAULT 0,
+			lux2 REAL NOT NULL DEFAULT 0,
+			timestamp INTEGER NOT NULL
+		)
+	`); err != nil {
+		return err
+	}
+
+	rows, err := db.Query(`PRAGMA table_info(average_readings)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	columns := make(map[string]bool)
+	for rows.Next() {
+		var (
+			cid       int
+			name      string
+			fieldType string
+			notNull   int
+			defaultV  sql.NullString
+			pk        int
+		)
+		if err := rows.Scan(&cid, &name, &fieldType, &notNull, &defaultV, &pk); err != nil {
+			return err
+		}
+		columns[name] = true
+	}
+
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	if !columns["moist2"] {
+		if _, err := db.Exec(`ALTER TABLE average_readings ADD COLUMN moist2 REAL NOT NULL DEFAULT 0`); err != nil {
+			return err
+		}
+	}
+	if !columns["lux1"] {
+		if _, err := db.Exec(`ALTER TABLE average_readings ADD COLUMN lux1 REAL NOT NULL DEFAULT 0`); err != nil {
+			return err
+		}
+	}
+	if !columns["lux2"] {
+		if _, err := db.Exec(`ALTER TABLE average_readings ADD COLUMN lux2 REAL NOT NULL DEFAULT 0`); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
