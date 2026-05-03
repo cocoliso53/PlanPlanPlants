@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <BH1750.h>
 #include <DHT.h>
+#include <esp_sleep.h>
 #include <HTTPClient.h>
 #include <WiFi.h>
 #include <Wire.h>
@@ -17,6 +18,7 @@ constexpr uint8_t SDA_PIN = 21;
 constexpr uint8_t SCL_PIN = 22;
 constexpr uint8_t LUX_SENSOR_1_ADDRESS = 0x23;
 constexpr uint8_t LUX_SENSOR_2_ADDRESS = 0x5C;
+constexpr uint64_t SLEEP_DURATION_SECONDS = 60;
 
 struct TestingLogs {
   int moist1;
@@ -92,11 +94,19 @@ void sendLogs(const TestingLogs& logs) {
   Serial.print("HTTP response code: ");
   Serial.println(responseCode);
 
-  if (responseCode > 200 && responseCode < 400) {
+  if (responseCode >= 200 && responseCode < 400) {
     Serial.print("Response success");
   }
 
   http.end();
+}
+
+void enterDeepSleep() {
+  Serial.println("Going to deep sleep for 60 seconds");
+  Serial.flush();
+
+  esp_sleep_enable_timer_wakeup(SLEEP_DURATION_SECONDS * 1000000ULL);
+  esp_deep_sleep_start();
 }
 
 void setup() {
@@ -217,5 +227,5 @@ void loop() {
     Serial.println("Skipping POST because one or more sensor reads failed");
   }
 
-  delay(3000);
+  enterDeepSleep();
 }
