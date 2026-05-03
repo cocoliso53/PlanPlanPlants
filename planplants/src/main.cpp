@@ -11,21 +11,28 @@ const char* API_URL = "http://192.168.1.74:8080/echo?source=arduino&mode=test";
 
 constexpr uint8_t DHT_PIN = 4;
 constexpr uint8_t DHT_TYPE = DHT11;
-constexpr uint8_t MOISTURE_PIN = 34;
+constexpr uint8_t MOISTURE_1_PIN = 34;
+constexpr uint8_t MOISTURE_2_PIN = 35;
 constexpr uint8_t SDA_PIN = 21;
 constexpr uint8_t SCL_PIN = 22;
+constexpr uint8_t LUX_SENSOR_1_ADDRESS = 0x23;
+constexpr uint8_t LUX_SENSOR_2_ADDRESS = 0x5C;
 
 struct TestingLogs {
   int moist1;
+  int moist2;
   float temp;
   float humidity;
-  float lux;
+  float lux1;
+  float lux2;
   uint64_t timestamp;
 };
 
 DHT dht(DHT_PIN, DHT_TYPE);
-BH1750 lightMeter;
-bool lightSensorReady = false;
+BH1750 luxSensor1;
+BH1750 luxSensor2;
+bool luxSensor1Ready = false;
+bool luxSensor2Ready = false;
 unsigned long readCount = 0;
 
 void scanI2CBus() {
@@ -58,9 +65,11 @@ void connectToWifi() {
 
 String createPayload(const TestingLogs& logs) {
   return "{\"moist1\":" + String(logs.moist1) +
+         ",\"moist2\":" + String(logs.moist2) +
          ",\"temp\":" + String(logs.temp, 2) +
          ",\"humidity\":" + String(logs.humidity, 2) +
-         ",\"lux\":" + String(logs.lux, 2) +
+         ",\"lux1\":" + String(logs.lux1, 2) +
+         ",\"lux2\":" + String(logs.lux2, 2) +
          ",\"timestamp\":" + String((unsigned long long) logs.timestamp) + "}";
 }
 
@@ -102,27 +111,34 @@ void setup() {
   Serial.println("Multi-sensor debug test");
   Serial.print("DHT11 pin: ");
   Serial.println(DHT_PIN);
-  Serial.print("Moisture pin: ");
-  Serial.println(MOISTURE_PIN);
+  Serial.print("Moisture 1 pin: ");
+  Serial.println(MOISTURE_1_PIN);
+  Serial.print("Moisture 2 pin: ");
+  Serial.println(MOISTURE_2_PIN);
   Serial.print("SDA pin: ");
   Serial.println(SDA_PIN);
   Serial.print("SCL pin: ");
   Serial.println(SCL_PIN);
+  Serial.print("Lux sensor 1 address (ADDR -> GND): 0x");
+  Serial.println(LUX_SENSOR_1_ADDRESS, HEX);
+  Serial.print("Lux sensor 2 address (ADDR -> 3V3): 0x");
+  Serial.println(LUX_SENSOR_2_ADDRESS, HEX);
 
   scanI2CBus();
 
-  lightSensorReady = lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE, 0x23, &Wire);
+  luxSensor1Ready = luxSensor1.begin(BH1750::CONTINUOUS_HIGH_RES_MODE, LUX_SENSOR_1_ADDRESS, &Wire);
+  luxSensor2Ready = luxSensor2.begin(BH1750::CONTINUOUS_HIGH_RES_MODE, LUX_SENSOR_2_ADDRESS, &Wire);
 
-  if (lightSensorReady) {
-    Serial.println("BH1750 ready at address 0x23");
+  if (luxSensor1Ready) {
+    Serial.println("BH1750 lux sensor 1 ready at address 0x23");
   } else {
-    lightSensorReady = lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE, 0x5C, &Wire);
+    Serial.println("BH1750 lux sensor 1 init failed. Check ADDR -> GND wiring.");
+  }
 
-    if (lightSensorReady) {
-      Serial.println("BH1750 ready at address 0x5C");
-    } else {
-      Serial.println("BH1750 init failed. Check wiring, power, and I2C address.");
-    }
+  if (luxSensor2Ready) {
+    Serial.println("BH1750 lux sensor 2 ready at address 0x5C");
+  } else {
+    Serial.println("BH1750 lux sensor 2 init failed. Check ADDR -> 3V3 wiring.");
   }
 }
 
@@ -135,8 +151,10 @@ void loop() {
 
   float humidity = dht.readHumidity();
   float temperatureC = dht.readTemperature();
-  int moistureValue = analogRead(MOISTURE_PIN);
-  float luxValue = -1;
+  int moisture1Value = analogRead(MOISTURE_1_PIN);
+  int moisture2Value = analogRead(MOISTURE_2_PIN);
+  float lux1Value = -1;
+  float lux2Value = -1;
   bool dhtOk = !isnan(humidity) && !isnan(temperatureC);
 
   if (!dhtOk) {
@@ -151,29 +169,47 @@ void loop() {
     Serial.println(" C");
   }
 
-  Serial.print("Moisture: ");
-  Serial.println(moistureValue);
+  Serial.print("Moisture 1: ");
+  Serial.println(moisture1Value);
+  Serial.print("Moisture 2: ");
+  Serial.println(moisture2Value);
 
-  if (!lightSensorReady) {
-    Serial.println("BH1750 not ready");
+  if (!luxSensor1Ready) {
+    Serial.println("BH1750 lux sensor 1 not ready");
   } else {
-    luxValue = lightMeter.readLightLevel();
+    lux1Value = luxSensor1.readLightLevel();
 
-    if (luxValue < 0) {
-      Serial.println("BH1750 read failed");
+    if (lux1Value < 0) {
+      Serial.println("BH1750 lux sensor 1 read failed");
     } else {
-      Serial.print("Light: ");
-      Serial.print(luxValue);
+      Serial.print("Light lux sensor 1: ");
+      Serial.print(lux1Value);
       Serial.println(" lx");
     }
   }
 
-  if (dhtOk && luxValue >= 0) {
+  if (!luxSensor2Ready) {
+    Serial.println("BH1750 lux sensor 2 not ready");
+  } else {
+    lux2Value = luxSensor2.readLightLevel();
+
+    if (lux2Value < 0) {
+      Serial.println("BH1750 lux sensor 2 read failed");
+    } else {
+      Serial.print("Light lux sensor 2: ");
+      Serial.print(lux2Value);
+      Serial.println(" lx");
+    }
+  }
+
+  if (dhtOk && lux1Value >= 0 && lux2Value >= 0) {
     TestingLogs logs = {
-      moistureValue,
+      moisture1Value,
+      moisture2Value,
       temperatureC,
       humidity,
-      luxValue,
+      lux1Value,
+      lux2Value,
       static_cast<uint64_t>(millis())
     };
 
