@@ -20,17 +20,21 @@ type ResultReady = bool
 
 type testingLogs struct {
 	Moist1    int     `json:"moist1"`
+	Moist2    int     `json:"moist2"`
 	Temp      float64 `json:"temp"`
 	Humidity  float64 `json:"humidity"`
-	Lux       float64 `json:"lux"`
+	Lux1      float64 `json:"lux1"`
+	Lux2      float64 `json:"lux2"`
 	Timestamp uint64  `json:"timestamp"`
 }
 
 type testingLogsAvg struct {
 	AvgMoist1   float64 `json:"moist1"`
+	AvgMoist2   float64 `json:"moist2"`
 	AvgTemp     float64 `json:"temp"`
 	AvgHumidity float64 `json:"humidity"`
-	AvgLux      float64 `json:"lux"`
+	AvgLux1     float64 `json:"lux1"`
+	AvgLux2     float64 `json:"lux2"`
 	Timestamp   int64   `json:"timestamp"`
 }
 
@@ -55,16 +59,7 @@ func main() {
 	}
 	defer db.Close()
 
-	if _, err := db.Exec(`
-		CREATE TABLE IF NOT EXISTS average_readings (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			moist1 REAL NOT NULL,
-			temp REAL NOT NULL,
-			humidity REAL NOT NULL,
-			lux REAL NOT NULL,
-			timestamp INTEGER NOT NULL
-		)
-	`); err != nil {
+	if err := ensureAverageReadingsTable(db); err != nil {
 		log.Fatal(err)
 	}
 
@@ -140,15 +135,19 @@ func (r *testingLogsSlice) averageReadingData(latestReading testingLogs) (testin
 
 	if len(r.s) == int(maxLen) {
 		var avgMoist1 float64
+		var avgMoist2 float64
 		var avgTemp float64
 		var avgHumidity float64
-		var avgLux float64
+		var avgLux1 float64
+		var avgLux2 float64
 
 		for _, item := range r.s {
 			avgMoist1 += float64(item.Moist1)
+			avgMoist2 += float64(item.Moist2)
 			avgTemp += item.Temp
 			avgHumidity += item.Humidity
-			avgLux += item.Lux
+			avgLux1 += item.Lux1
+			avgLux2 += item.Lux2
 		}
 
 		// reset to empty slice
@@ -156,9 +155,11 @@ func (r *testingLogsSlice) averageReadingData(latestReading testingLogs) (testin
 
 		return testingLogsAvg{
 			AvgMoist1:   avgMoist1 / maxLen,
+			AvgMoist2:   avgMoist2 / maxLen,
 			AvgTemp:     avgTemp / maxLen,
 			AvgHumidity: avgHumidity / maxLen,
-			AvgLux:      avgLux / maxLen,
+			AvgLux1:     avgLux1 / maxLen,
+			AvgLux2:     avgLux2 / maxLen,
 			Timestamp:   time.Now().Unix(),
 		}, true
 	} else {
@@ -190,11 +191,13 @@ func averageReadingsDataHandler(db *sql.DB, readings *testingLogsSlice, w http.R
 	result, ready := readings.averageReadingData(reading)
 	if ready {
 		if _, err := db.Exec(
-			`INSERT INTO average_readings (moist1, temp, humidity, lux, timestamp) VALUES (?, ?, ?, ?, ?)`,
+			`INSERT INTO average_readings (moist1, moist2, temp, humidity, lux1, lux2, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 			result.AvgMoist1,
+			result.AvgMoist2,
 			result.AvgTemp,
 			result.AvgHumidity,
-			result.AvgLux,
+			result.AvgLux1,
+			result.AvgLux2,
 			result.Timestamp,
 		); err != nil {
 			http.Error(w, "failed to store average reading", http.StatusInternalServerError)
@@ -205,6 +208,67 @@ func averageReadingsDataHandler(db *sql.DB, readings *testingLogsSlice, w http.R
 		w.WriteHeader(http.StatusNoContent)
 	}
 
+}
+
+func ensureAverageReadingsTable(db *sql.DB) error {
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS average_readings (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			moist1 REAL NOT NULL,
+			moist2 REAL NOT NULL DEFAULT 0,
+			temp REAL NOT NULL,
+			humidity REAL NOT NULL,
+			lux1 REAL NOT NULL DEFAULT 0,
+			lux2 REAL NOT NULL DEFAULT 0,
+			timestamp INTEGER NOT NULL
+		)
+	`); err != nil {
+		return err
+	}
+
+	rows, err := db.Query(`PRAGMA table_info(average_readings)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	columns := make(map[string]bool)
+	for rows.Next() {
+		var (
+			cid       int
+			name      string
+			fieldType string
+			notNull   int
+			defaultV  sql.NullString
+			pk        int
+		)
+		if err := rows.Scan(&cid, &name, &fieldType, &notNull, &defaultV, &pk); err != nil {
+			return err
+		}
+		columns[name] = true
+	}
+
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	if !columns["moist2"] {
+		if _, err := db.Exec(`ALTER TABLE average_readings ADD COLUMN moist2 REAL NOT NULL DEFAULT 0`); err != nil {
+			return err
+		}
+	}
+	if !columns["lux1"] {
+		if _, err := db.Exec(`ALTER TABLE average_readings ADD COLUMN lux1 REAL NOT NULL DEFAULT 0`); err != nil {
+			return err
+		}
+	}
+	if !columns["lux2"] {
+		if _, err := db.Exec(`ALTER TABLE average_readings ADD COLUMN lux2 REAL NOT NULL DEFAULT 0`); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
