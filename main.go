@@ -18,6 +18,8 @@ type healthResponse struct {
 
 type ResultReady = bool
 
+const prototypeDeviceID = "prototype"
+
 type testingLogs struct {
 	Moist1    int     `json:"moist1"`
 	Moist2    int     `json:"moist2"`
@@ -191,13 +193,14 @@ func averageReadingsDataHandler(db *sql.DB, readings *testingLogsSlice, w http.R
 	result, ready := readings.averageReadingData(reading)
 	if ready {
 		if _, err := db.Exec(
-			`INSERT INTO average_readings (moist1, moist2, temp, humidity, lux1, lux2, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO average_readings (moist1, moist2, temp, humidity, lux1, lux2, deviceId, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			result.AvgMoist1,
 			result.AvgMoist2,
 			result.AvgTemp,
 			result.AvgHumidity,
 			result.AvgLux1,
 			result.AvgLux2,
+			prototypeDeviceID,
 			result.Timestamp,
 		); err != nil {
 			http.Error(w, "failed to store average reading", http.StatusInternalServerError)
@@ -220,6 +223,7 @@ func ensureAverageReadingsTable(db *sql.DB) error {
 			humidity REAL NOT NULL,
 			lux1 REAL NOT NULL DEFAULT 0,
 			lux2 REAL NOT NULL DEFAULT 0,
+			deviceId TEXT NOT NULL DEFAULT 'prototype',
 			timestamp INTEGER NOT NULL
 		)
 	`); err != nil {
@@ -264,6 +268,12 @@ func ensureAverageReadingsTable(db *sql.DB) error {
 	}
 	if !columns["lux2"] {
 		if _, err := db.Exec(`ALTER TABLE average_readings ADD COLUMN lux2 REAL NOT NULL DEFAULT 0`); err != nil {
+			return err
+		}
+	}
+
+	if !columns["deviceId"] {
+		if _, err := db.Exec(`ALTER TABLE average_readings ADD COLUMN deviceId TEXT NOT NULL DEFAULT 'prototype'`); err != nil {
 			return err
 		}
 	}
