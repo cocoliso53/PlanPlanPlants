@@ -18,7 +18,9 @@ constexpr uint8_t SDA_PIN = 21;
 constexpr uint8_t SCL_PIN = 22;
 constexpr uint8_t LUX_SENSOR_1_ADDRESS = 0x23;
 constexpr uint8_t LUX_SENSOR_2_ADDRESS = 0x5C;
-constexpr uint64_t SLEEP_DURATION_SECONDS = 60;
+constexpr uint8_t READINGS_PER_CYCLE = 5;
+constexpr uint32_t READING_INTERVAL_MILLISECONDS = 1000;
+constexpr uint64_t SLEEP_DURATION_SECONDS = 10 * 60;
 
 struct TestingLogs {
   int moist1;
@@ -102,7 +104,7 @@ void sendLogs(const TestingLogs& logs) {
 }
 
 void enterDeepSleep() {
-  Serial.println("Going to deep sleep for 60 seconds");
+  Serial.println("Going to deep sleep for 10 minutes");
   Serial.flush();
 
   esp_sleep_enable_timer_wakeup(SLEEP_DURATION_SECONDS * 1000000ULL);
@@ -151,7 +153,7 @@ void setup() {
   }
 }
 
-void loop() {
+void takeAndSendReading() {
   readCount++;
 
   Serial.println("---");
@@ -225,6 +227,17 @@ void loop() {
     sendLogs(logs);
   } else {
     Serial.println("Skipping POST because one or more sensor reads failed");
+  }
+
+}
+
+void loop() {
+  for (uint8_t reading = 0; reading < READINGS_PER_CYCLE; reading++) {
+    takeAndSendReading();
+
+    if (reading + 1 < READINGS_PER_CYCLE) {
+      delay(READING_INTERVAL_MILLISECONDS);
+    }
   }
 
   enterDeepSleep();
