@@ -1,4 +1,88 @@
 # PlanPlanPlants
+/^```$/N;/^```
+$/N;s/^```
+
+
+## Soil Sensor Calibration Analysis$/```
+
+## Soil Sensor Calibration Analysis/
+## Server Deployment
+
+The Go backend runs in one Docker container. SQLite does not need a separate
+container; its database file remains on the server and is mounted into the
+backend container.
+
+### Verify Docker
+
+```bash
+sudo systemctl status docker
+sudo docker run --rm hello-world
+```
+
+### Build and Run
+
+Ensure the persistent database directory exists:
+
+```bash
+mkdir -p /home/cuau/Projects/PlanPlanPlants/data
+```
+
+Build the backend image:
+
+```bash
+sudo docker build -t planplants /home/cuau/Projects/PlanPlanPlants
+```
+
+Run the backend:
+
+```bash
+sudo docker run -d \
+  --name planplants \
+  --restart unless-stopped \
+  -p 8080:8080 \
+  -v /home/cuau/Projects/PlanPlanPlants/data:/app/data \
+  planplants
+```
+
+The persistent database lives at:
+
+```text
+/home/cuau/Projects/PlanPlanPlants/data/planplants.db
+```
+
+Inside the container, the backend accesses the same file at:
+
+```text
+/app/data/planplants.db
+```
+
+### Check the Backend
+
+```bash
+sudo docker logs planplants
+curl http://localhost:8080/health
+```
+
+Expected health response:
+
+```json
+{"status":"ok"}
+```
+
+### Deploy an Updated Version
+
+```bash
+sudo docker build -t planplants /home/cuau/Projects/PlanPlanPlants
+sudo docker stop planplants
+sudo docker rm planplants
+sudo docker run -d \
+  --name planplants \
+  --restart unless-stopped \
+  -p 8080:8080 \
+  -v /home/cuau/Projects/PlanPlanPlants/data:/app/data \
+  planplants
+```
+
 
 ## Soil Sensor Calibration Analysis
 

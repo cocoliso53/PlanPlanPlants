@@ -8,7 +8,7 @@
 
 const char* WIFI_SSID = "";
 const char* WIFI_PASSWORD = "";
-const char* API_URL = "http://192.168.1.74:8080/readings";
+const char* API_URL = "";
 
 constexpr uint8_t DHT_PIN = 4;
 constexpr uint8_t DHT_TYPE = DHT11;
