@@ -14,6 +14,7 @@ constexpr uint8_t DHT_PIN = 4;
 constexpr uint8_t DHT_TYPE = DHT11;
 constexpr uint8_t MOISTURE_1_PIN = 34;
 constexpr uint8_t MOISTURE_2_PIN = 35;
+constexpr uint8_t BATTERY_PIN = 33;
 constexpr uint8_t SDA_PIN = 21;
 constexpr uint8_t SCL_PIN = 22;
 constexpr uint8_t LUX_SENSOR_1_ADDRESS = 0x23;
@@ -29,6 +30,7 @@ struct TestingLogs {
   float humidity;
   float lux1;
   float lux2;
+  float batteryPinVoltage;
   uint64_t timestamp;
 };
 
@@ -74,6 +76,7 @@ String createPayload(const TestingLogs& logs) {
          ",\"humidity\":" + String(logs.humidity, 2) +
          ",\"lux1\":" + String(logs.lux1, 2) +
          ",\"lux2\":" + String(logs.lux2, 2) +
+         ",\"batteryPinVoltage\":" + String(logs.batteryPinVoltage, 3) +
          ",\"timestamp\":" + String((unsigned long long) logs.timestamp) + "}";
 }
 
@@ -117,6 +120,7 @@ void setup() {
 
   dht.begin();
   Wire.begin(SDA_PIN, SCL_PIN);
+  analogSetPinAttenuation(BATTERY_PIN, ADC_11db);
   connectToWifi();
 
   Serial.println("Multi-sensor debug test");
@@ -126,6 +130,8 @@ void setup() {
   Serial.println(MOISTURE_1_PIN);
   Serial.print("Moisture 2 pin: ");
   Serial.println(MOISTURE_2_PIN);
+  Serial.print("Battery pin: ");
+  Serial.println(BATTERY_PIN);
   Serial.print("SDA pin: ");
   Serial.println(SDA_PIN);
   Serial.print("SCL pin: ");
@@ -164,6 +170,7 @@ void takeAndSendReading() {
   float temperatureC = dht.readTemperature();
   int moisture1Value = analogRead(MOISTURE_1_PIN);
   int moisture2Value = analogRead(MOISTURE_2_PIN);
+  float batteryPinVoltage = analogReadMilliVolts(BATTERY_PIN) / 1000.0;
   float lux1Value = -1;
   float lux2Value = -1;
   bool dhtOk = !isnan(humidity) && !isnan(temperatureC);
@@ -184,6 +191,9 @@ void takeAndSendReading() {
   Serial.println(moisture1Value);
   Serial.print("Moisture 2: ");
   Serial.println(moisture2Value);
+  Serial.print("Battery pin voltage: ");
+  Serial.print(batteryPinVoltage, 3);
+  Serial.println(" V");
 
   if (!luxSensor1Ready) {
     Serial.println("BH1750 lux sensor 1 not ready");
@@ -221,6 +231,7 @@ void takeAndSendReading() {
       humidity,
       lux1Value,
       lux2Value,
+      batteryPinVoltage,
       static_cast<uint64_t>(millis())
     };
 
