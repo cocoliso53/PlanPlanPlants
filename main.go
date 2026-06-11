@@ -21,23 +21,25 @@ type ResultReady = bool
 const prototypeDeviceID = "prototype"
 
 type testingLogs struct {
-	Moist1    int     `json:"moist1"`
-	Moist2    int     `json:"moist2"`
-	Temp      float64 `json:"temp"`
-	Humidity  float64 `json:"humidity"`
-	Lux1      float64 `json:"lux1"`
-	Lux2      float64 `json:"lux2"`
-	Timestamp uint64  `json:"timestamp"`
+	Moist1       int     `json:"moist1"`
+	Moist2       int     `json:"moist2"`
+	Temp         float64 `json:"temp"`
+	Humidity     float64 `json:"humidity"`
+	Lux1         float64 `json:"lux1"`
+	Lux2         float64 `json:"lux2"`
+	BatteryVolts float64 `json:"batteryPinVoltage"`
+	Timestamp    uint64  `json:"timestamp"`
 }
 
 type testingLogsAvg struct {
-	AvgMoist1   float64 `json:"moist1"`
-	AvgMoist2   float64 `json:"moist2"`
-	AvgTemp     float64 `json:"temp"`
-	AvgHumidity float64 `json:"humidity"`
-	AvgLux1     float64 `json:"lux1"`
-	AvgLux2     float64 `json:"lux2"`
-	Timestamp   int64   `json:"timestamp"`
+	AvgMoist1       float64 `json:"moist1"`
+	AvgMoist2       float64 `json:"moist2"`
+	AvgTemp         float64 `json:"temp"`
+	AvgHumidity     float64 `json:"humidity"`
+	AvgLux1         float64 `json:"lux1"`
+	AvgLux2         float64 `json:"lux2"`
+	AvgBatteryVolts float64 `json:"batteryPinVoltage"`
+	Timestamp       int64   `json:"timestamp"`
 }
 
 type testingLogsSlice struct {
@@ -142,6 +144,7 @@ func (r *testingLogsSlice) averageReadingData(latestReading testingLogs) (testin
 		var avgHumidity float64
 		var avgLux1 float64
 		var avgLux2 float64
+		var avgBatteryVolts float64
 
 		for _, item := range r.s {
 			avgMoist1 += float64(item.Moist1)
@@ -150,19 +153,21 @@ func (r *testingLogsSlice) averageReadingData(latestReading testingLogs) (testin
 			avgHumidity += item.Humidity
 			avgLux1 += item.Lux1
 			avgLux2 += item.Lux2
+			avgBatteryVolts += item.BatteryVolts
 		}
 
 		// reset to empty slice
 		r.s = r.s[:0]
 
 		return testingLogsAvg{
-			AvgMoist1:   avgMoist1 / maxLen,
-			AvgMoist2:   avgMoist2 / maxLen,
-			AvgTemp:     avgTemp / maxLen,
-			AvgHumidity: avgHumidity / maxLen,
-			AvgLux1:     avgLux1 / maxLen,
-			AvgLux2:     avgLux2 / maxLen,
-			Timestamp:   time.Now().Unix(),
+			AvgMoist1:       avgMoist1 / maxLen,
+			AvgMoist2:       avgMoist2 / maxLen,
+			AvgTemp:         avgTemp / maxLen,
+			AvgHumidity:     avgHumidity / maxLen,
+			AvgLux1:         avgLux1 / maxLen,
+			AvgLux2:         avgLux2 / maxLen,
+			AvgBatteryVolts: avgBatteryVolts / maxLen,
+			Timestamp:       time.Now().Unix(),
 		}, true
 	} else {
 		return testingLogsAvg{}, false
@@ -193,13 +198,14 @@ func averageReadingsDataHandler(db *sql.DB, readings *testingLogsSlice, w http.R
 	result, ready := readings.averageReadingData(reading)
 	if ready {
 		if _, err := db.Exec(
-			`INSERT INTO average_readings (moist1, moist2, temp, humidity, lux1, lux2, deviceId, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO average_readings (moist1, moist2, temp, humidity, lux1, lux2, batteryPinVoltage, deviceId, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			result.AvgMoist1,
 			result.AvgMoist2,
 			result.AvgTemp,
 			result.AvgHumidity,
 			result.AvgLux1,
 			result.AvgLux2,
+			result.AvgBatteryVolts,
 			prototypeDeviceID,
 			result.Timestamp,
 		); err != nil {
@@ -223,6 +229,7 @@ func ensureAverageReadingsTable(db *sql.DB) error {
 			humidity REAL NOT NULL,
 			lux1 REAL NOT NULL DEFAULT 0,
 			lux2 REAL NOT NULL DEFAULT 0,
+			batteryPinVoltage REAL NOT NULL DEFAULT 0,
 			deviceId TEXT NOT NULL DEFAULT 'prototype',
 			timestamp INTEGER NOT NULL
 		)
@@ -268,6 +275,12 @@ func ensureAverageReadingsTable(db *sql.DB) error {
 	}
 	if !columns["lux2"] {
 		if _, err := db.Exec(`ALTER TABLE average_readings ADD COLUMN lux2 REAL NOT NULL DEFAULT 0`); err != nil {
+			return err
+		}
+	}
+
+	if !columns["batteryPinVoltage"] {
+		if _, err := db.Exec(`ALTER TABLE average_readings ADD COLUMN batteryPinVoltage REAL NOT NULL DEFAULT 0`); err != nil {
 			return err
 		}
 	}
