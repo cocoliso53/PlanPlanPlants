@@ -223,22 +223,18 @@ void takeAndSendReading() {
     }
   }
 
-  if (dhtOk && lux1Value >= 0 && lux2Value >= 0) {
-    TestingLogs logs = {
-      moisture1Value,
-      moisture2Value,
-      temperatureC,
-      humidity,
-      lux1Value,
-      lux2Value,
-      batteryPinVoltage,
-      static_cast<uint64_t>(millis())
-    };
+  TestingLogs logs = {
+    moisture1Value,
+    moisture2Value,
+    dhtOk ? temperatureC : 0,
+    dhtOk ? humidity : 0,
+    lux1Value >= 0 ? lux1Value : 0,
+    lux2Value >= 0 ? lux2Value : 0,
+    batteryPinVoltage,
+    static_cast<uint64_t>(millis())
+  };
 
-    sendLogs(logs);
-  } else {
-    Serial.println("Skipping POST because one or more sensor reads failed");
-  }
+  sendLogs(logs);
 
 }
 
