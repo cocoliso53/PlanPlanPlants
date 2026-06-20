@@ -1,12 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"html"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -65,6 +70,10 @@ func main() {
 
 	if err := ensureAverageReadingsTable(db); err != nil {
 		log.Fatal(err)
+	}
+
+	if token := os.Getenv("TELEGRAM_BOT_TOKEN"); token != "" {
+		go startTelegramBot(db, token)
 	}
 
 	if port := os.Getenv("PORT"); port != "" {
@@ -350,4 +359,213 @@ func (w *loggingResponseWriter) Write(data []byte) (int, error) {
 	n, err := w.ResponseWriter.Write(data)
 	w.bytesWritten += n
 	return n, err
+}
+
+// Telegram bot
+
+type telegramUpdatesResponse struct {
+	OK     bool             `json:"ok"`
+	Result []telegramUpdate `json:"result"`
+}
+
+type telegramUpdate struct {
+	UpdateID int             `json:"update_id"`
+	Message  telegramMessage `json:"message"`
+}
+
+type telegramMessage struct {
+	Chat telegramChat `json:"chat"`
+	Text string       `json:"text"`
+}
+
+type telegramChat struct {
+	ID int64 `json:"id"`
+}
+
+func startTelegramBot(db *sql.DB, token string) {
+	client := &http.Client{Timeout: 35 * time.Second}
+	baseURL := "https://api.telegram.org/bot" + token
+	offset := 0
+
+	log.Println("telegram bot started")
+
+	for {
+		updates, err := getTelegramUpdates(client, baseURL, offset)
+		if err != nil {
+			log.Printf("telegram getUpdates error: %v", err)
+			time.Sleep(3 * time.Second)
+			continue
+		}
+
+		for _, update := range updates {
+			if update.UpdateID >= offset {
+				offset = update.UpdateID + 1
+			}
+			if update.Message.Chat.ID == 0 || update.Message.Text == "" {
+				continue
+			}
+
+			message := telegramCommandResponse(db, update.Message.Text)
+			if message == "" {
+				continue
+			}
+			if err := sendTelegramMessage(client, baseURL, update.Message.Chat.ID, message); err != nil {
+				log.Printf("telegram sendMessage error: %v", err)
+			}
+		}
+	}
+}
+
+func telegramCommandResponse(db *sql.DB, text string) string {
+	fields := strings.Fields(text)
+	if len(fields) == 0 {
+		return ""
+	}
+
+	command := strings.ToLower(fields[0])
+	command = strings.Split(command, "@")[0]
+
+	switch command {
+	case "/latets", "/latest":
+		message, err := latestReadingsMessage(db, 5)
+		if err != nil {
+			return "failed to read latest readings: " + err.Error()
+		}
+		return message
+	case "/start", "/help":
+		return "Available commands:\n/latets - show latest 5 readings"
+	default:
+		return ""
+	}
+}
+
+func latestReadingsMessage(db *sql.DB, limit int) (string, error) {
+	rows, err := db.Query("SELECT * FROM average_readings ORDER BY timestamp DESC LIMIT ?", limit)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+
+	columns, err := rows.Columns()
+	if err != nil {
+		return "", err
+	}
+
+	var values [][]string
+	for rows.Next() {
+		raw := make([]any, len(columns))
+		dest := make([]any, len(columns))
+		for i := range raw {
+			dest[i] = &raw[i]
+		}
+		if err := rows.Scan(dest...); err != nil {
+			return "", err
+		}
+
+		row := make([]string, len(columns))
+		for i, value := range raw {
+			row[i] = sqliteValueString(value)
+		}
+		values = append(values, row)
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	if len(values) == 0 {
+		return "no readings found", nil
+	}
+
+	return formatReadingsByMeasurementHTML(columns, values), nil
+}
+
+func sqliteValueString(value any) string {
+	switch v := value.(type) {
+	case nil:
+		return ""
+	case []byte:
+		return string(v)
+	default:
+		return fmt.Sprint(v)
+	}
+}
+
+func formatReadingsByMeasurementHTML(columns []string, rows [][]string) string {
+	var out strings.Builder
+
+	for columnIndex, column := range columns {
+		if column == "id" {
+			continue
+		}
+		if out.Len() > 0 {
+			out.WriteString("\n\n")
+		}
+
+		out.WriteString("<b>")
+		out.WriteString(html.EscapeString(column))
+		out.WriteString("</b>: ")
+
+		for rowIndex := len(rows) - 1; rowIndex >= 0; rowIndex-- {
+			if rowIndex != len(rows)-1 {
+				out.WriteString(", ")
+			}
+			out.WriteString(html.EscapeString(rows[rowIndex][columnIndex]))
+		}
+	}
+
+	return out.String()
+}
+
+func getTelegramUpdates(client *http.Client, baseURL string, offset int) ([]telegramUpdate, error) {
+	url := baseURL + "/getUpdates?timeout=30&offset=" + strconv.Itoa(offset)
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var decoded telegramUpdatesResponse
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		return nil, err
+	}
+	if !decoded.OK {
+		return nil, fmt.Errorf("telegram returned ok=false")
+	}
+
+	return decoded.Result, nil
+}
+
+func sendTelegramMessage(client *http.Client, baseURL string, chatID int64, text string) error {
+	payload := map[string]any{
+		"chat_id":    chatID,
+		"text":       text,
+		"parse_mode": "HTML",
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	resp, err := client.Post(baseURL+"/sendMessage", "application/json", bytes.NewReader(encoded))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("status %d: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
 }
