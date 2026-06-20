@@ -198,3 +198,43 @@ func TestAverageReadingsDataHandlerStoresBatteryPinVoltage(t *testing.T) {
 		t.Fatalf("deviceId = %q, want %q", deviceID, prototypeDeviceID)
 	}
 }
+
+func TestTelegramLatetsCommandReturnsLatestReadings(t *testing.T) {
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	if err := ensureAverageReadingsTable(db); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 1; i <= 6; i++ {
+		if _, err := db.Exec(
+			`INSERT INTO average_readings (moist1, moist2, temp, humidity, lux1, lux2, batteryPinVoltage, deviceId, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			100+i,
+			200+i,
+			20+i,
+			50+i,
+			10+i,
+			11+i,
+			1.9,
+			prototypeDeviceID,
+			1000+i,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := telegramCommandResponse(db, "/latets")
+	if !strings.Contains(got, "<b>lux1</b>: 12, 13, 14, 15, 16") {
+		t.Fatalf("unexpected /latets response:\n%s", got)
+	}
+	if !strings.Contains(got, "<b>timestamp</b>: 1002, 1003, 1004, 1005, 1006") {
+		t.Fatalf("unexpected timestamp order in /latets response:\n%s", got)
+	}
+	if strings.Contains(got, "1001") || strings.Contains(got, "<b>id</b>") {
+		t.Fatalf("/latets response should only include latest 5 rows and should skip id:\n%s", got)
+	}
+}

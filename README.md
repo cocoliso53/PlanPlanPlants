@@ -1,11 +1,5 @@
 # PlanPlanPlants
-/^```$/N;/^```
-$/N;s/^```
 
-
-## Soil Sensor Calibration Analysis$/```
-
-## Soil Sensor Calibration Analysis/
 ## Server Deployment
 
 The Go backend runs in one Docker container. SQLite does not need a separate
@@ -44,6 +38,36 @@ sudo docker run -d \
   planplants
 ```
 
+### Telegram Bot
+
+The Telegram bot runs inside the same backend process. There is no separate bot
+binary or Docker container.
+
+If `TELEGRAM_BOT_TOKEN` is not set, the backend still runs normally, but the bot
+does not start.
+
+For local development, compile the backend and then run the binary:
+
+```bash
+go build -o planplants .
+TELEGRAM_BOT_TOKEN="your_bot_token_here" ./planplants
+```
+
+For Docker, pass the token as an environment variable when starting the
+container:
+
+```bash
+sudo docker run -d \
+  --name planplants \
+  --restart unless-stopped \
+  -p 8080:8080 \
+  -e TELEGRAM_BOT_TOKEN="your_bot_token_here" \
+  -v /home/cuau/Projects/PlanPlanPlants/data:/app/data \
+  planplants
+```
+
+Use `/latets` in Telegram to get the latest 5 readings from the database. If you do not want to run the bot, omit the `-e TELEGRAM_BOT_TOKEN=...` line.
+
 The persistent database lives at:
 
 ```text
@@ -79,6 +103,7 @@ sudo docker run -d \
   --name planplants \
   --restart unless-stopped \
   -p 8080:8080 \
+  -e TELEGRAM_BOT_TOKEN="your_bot_token_here" \
   -v /home/cuau/Projects/PlanPlanPlants/data:/app/data \
   planplants
 ```
