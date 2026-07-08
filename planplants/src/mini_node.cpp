@@ -70,11 +70,14 @@ bool addBroadcastPeer() {
 
 void initializeSensors() {
   analogSetPinAttenuation(MOISTURE_PIN, ADC_11db);
+  analogSetPinAttenuation(BATTERY_PIN, ADC_11db);
   Wire.begin(SDA_PIN, SCL_PIN);
   luxSensorReady = luxSensor.begin(BH1750::CONTINUOUS_HIGH_RES_MODE, LUX_SENSOR_ADDRESS, &Wire);
 
   Serial.print("Moisture pin: ");
   Serial.println(MOISTURE_PIN);
+  Serial.print("Battery pin: ");
+  Serial.println(BATTERY_PIN);
   Serial.print("I2C SDA pin: ");
   Serial.println(SDA_PIN);
   Serial.print("I2C SCL pin: ");
@@ -89,6 +92,7 @@ PlantReadingPacket takeReading() {
 
   uint16_t moistureValue = analogRead(MOISTURE_PIN);
   float luxValue = luxSensorReady ? luxSensor.readLightLevel() : -1.0f;
+  uint16_t batteryRawValue = analogRead(BATTERY_PIN);
 
   Serial.println("--- Reading sensors ---");
   Serial.print("nodeId: ");
@@ -99,13 +103,16 @@ PlantReadingPacket takeReading() {
   Serial.println(moistureValue);
   Serial.print("luxValue: ");
   Serial.println(luxValue);
+  Serial.print("batteryRawValue: ");
+  Serial.println(batteryRawValue);
 
   return {
     TEST_NODE_ID,
     readingCount,
     static_cast<uint32_t>(millis()),
     moistureValue,
-    luxValue
+    luxValue,
+    batteryRawValue
   };
 }
 

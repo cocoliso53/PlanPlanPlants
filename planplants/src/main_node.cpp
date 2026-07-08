@@ -51,6 +51,8 @@ void onDataReceived(const uint8_t* macAddress, const uint8_t* incomingData, int 
   Serial.println(packet.moistureValue);
   Serial.print("luxValue: ");
   Serial.println(packet.luxValue);
+  Serial.print("batteryRawValue: ");
+  Serial.println(packet.batteryRawValue);
 }
 
 }  // namespace
