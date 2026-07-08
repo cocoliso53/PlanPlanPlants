@@ -1,5 +1,7 @@
 #include <Arduino.h>
+#include <BH1750.h>
 #include <WiFi.h>
+#include <Wire.h>
 #include <esp_now.h>
 #include <esp_sleep.h>
 #include <esp_wifi.h>
@@ -10,6 +12,8 @@ namespace {
 
 constexpr uint8_t BROADCAST_ADDRESS[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 RTC_DATA_ATTR uint32_t readingCount = 0;
+BH1750 luxSensor;
+bool luxSensorReady = false;
 
 void setWifiChannel(uint8_t channel) {
   esp_wifi_set_promiscuous(true);
@@ -64,24 +68,50 @@ bool addBroadcastPeer() {
   return false;
 }
 
-void sendTestPacket() {
+void initializeSensors() {
+  analogSetPinAttenuation(MOISTURE_PIN, ADC_11db);
+  Wire.begin(SDA_PIN, SCL_PIN);
+  luxSensorReady = luxSensor.begin(BH1750::CONTINUOUS_HIGH_RES_MODE, LUX_SENSOR_ADDRESS, &Wire);
+
+  Serial.print("Moisture pin: ");
+  Serial.println(MOISTURE_PIN);
+  Serial.print("I2C SDA pin: ");
+  Serial.println(SDA_PIN);
+  Serial.print("I2C SCL pin: ");
+  Serial.println(SCL_PIN);
+  Serial.print("BH1750 address: 0x");
+  Serial.println(LUX_SENSOR_ADDRESS, HEX);
+  Serial.println(luxSensorReady ? "BH1750 ready" : "BH1750 init failed");
+}
+
+PlantReadingPacket takeReading() {
   readingCount++;
 
-  PlantReadingPacket packet = {
+  uint16_t moistureValue = analogRead(MOISTURE_PIN);
+  float luxValue = luxSensorReady ? luxSensor.readLightLevel() : -1.0f;
+
+  Serial.println("--- Reading sensors ---");
+  Serial.print("nodeId: ");
+  Serial.println(TEST_NODE_ID);
+  Serial.print("readingCount: ");
+  Serial.println(readingCount);
+  Serial.print("moistureValue: ");
+  Serial.println(moistureValue);
+  Serial.print("luxValue: ");
+  Serial.println(luxValue);
+
+  return {
     TEST_NODE_ID,
     readingCount,
-    static_cast<uint32_t>(millis())
+    static_cast<uint32_t>(millis()),
+    moistureValue,
+    luxValue
   };
+}
 
-  esp_err_t result = esp_now_send(BROADCAST_ADDRESS, reinterpret_cast<uint8_t*>(&packet), sizeof(packet));
+void sendReading(const PlantReadingPacket& packet) {
+  esp_err_t result = esp_now_send(BROADCAST_ADDRESS, reinterpret_cast<const uint8_t*>(&packet), sizeof(packet));
 
-  Serial.println("--- Sending packet ---");
-  Serial.print("nodeId: ");
-  Serial.println(packet.nodeId);
-  Serial.print("readingCount: ");
-  Serial.println(packet.readingCount);
-  Serial.print("uptimeMilliseconds: ");
-  Serial.println(packet.uptimeMilliseconds);
   Serial.print("esp_now_send result: ");
   Serial.println(result == ESP_OK ? "queued" : "failed");
 }
@@ -103,6 +133,7 @@ void setup() {
   delay(1000);
 
   printWakeReason();
+  initializeSensors();
 
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
@@ -127,7 +158,8 @@ void setup() {
   }
 
   Serial.println("Sender ready");
-  sendTestPacket();
+  PlantReadingPacket packet = takeReading();
+  sendReading(packet);
   delay(200);
   enterDeepSleep();
 }

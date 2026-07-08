@@ -47,6 +47,10 @@ void onDataReceived(const uint8_t* macAddress, const uint8_t* incomingData, int 
   Serial.println(packet.readingCount);
   Serial.print("uptimeMilliseconds: ");
   Serial.println(packet.uptimeMilliseconds);
+  Serial.print("moistureValue: ");
+  Serial.println(packet.moistureValue);
+  Serial.print("luxValue: ");
+  Serial.println(packet.luxValue);
 }
 
 }  // namespace
