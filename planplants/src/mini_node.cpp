@@ -14,6 +14,8 @@ constexpr uint8_t BROADCAST_ADDRESS[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 RTC_DATA_ATTR uint32_t readingCount = 0;
 BH1750 luxSensor;
 bool luxSensorReady = false;
+volatile bool readyReceived = false;
+ReadyPacket lastReady = {};
 
 void setWifiChannel(uint8_t channel) {
   esp_wifi_set_promiscuous(true);
@@ -52,6 +54,40 @@ void onDataSent(const uint8_t* macAddress, esp_now_send_status_t status) {
 
   Serial.print(" -> ");
   Serial.println(status == ESP_NOW_SEND_SUCCESS ? "success" : "failed");
+}
+
+void onDataReceived(const uint8_t* macAddress, const uint8_t* incomingData, int length) {
+  if (length != sizeof(ReadyPacket)) {
+    Serial.print("Ignored response with unexpected size: ");
+    Serial.println(length);
+    return;
+  }
+
+  ReadyPacket ready;
+  memcpy(&ready, incomingData, sizeof(ready));
+
+  if (ready.type != PACKET_TYPE_READY) {
+    Serial.print("Ignored response with unexpected type: ");
+    Serial.println(ready.type);
+    return;
+  }
+
+  lastReady = ready;
+  readyReceived = true;
+
+  Serial.print("Ready received from ");
+  for (int i = 0; i < 6; i++) {
+    if (macAddress[i] < 16) {
+      Serial.print("0");
+    }
+    Serial.print(macAddress[i], HEX);
+    if (i < 5) {
+      Serial.print(":");
+    }
+  }
+  Serial.println();
+  Serial.print("Ready nodeId: ");
+  Serial.println(ready.nodeId);
 }
 
 bool addBroadcastPeer() {
@@ -107,6 +143,7 @@ PlantReadingPacket takeReading() {
   Serial.println(batteryRawValue);
 
   return {
+    PACKET_TYPE_READING,
     TEST_NODE_ID,
     readingCount,
     static_cast<uint32_t>(millis()),
@@ -116,10 +153,50 @@ PlantReadingPacket takeReading() {
   };
 }
 
+bool waitForReady() {
+  unsigned long startedAt = millis();
+
+  while (millis() - startedAt < HANDSHAKE_WAIT_MILLISECONDS) {
+    if (readyReceived) {
+      readyReceived = false;
+      return lastReady.nodeId == TEST_NODE_ID;
+    }
+
+    delay(10);
+  }
+
+  return false;
+}
+
+bool pingMainNode() {
+  HelloPacket hello = {
+    PACKET_TYPE_HELLO,
+    TEST_NODE_ID
+  };
+
+  readyReceived = false;
+  esp_err_t result = esp_now_send(BROADCAST_ADDRESS, reinterpret_cast<const uint8_t*>(&hello), sizeof(hello));
+
+  Serial.print("Hello send result: ");
+  Serial.println(result == ESP_OK ? "queued" : "failed");
+
+  if (result != ESP_OK) {
+    return false;
+  }
+
+  if (waitForReady()) {
+    Serial.println("Main node is listening");
+    return true;
+  }
+
+  Serial.println("Main node did not respond");
+  return false;
+}
+
 void sendReading(const PlantReadingPacket& packet) {
   esp_err_t result = esp_now_send(BROADCAST_ADDRESS, reinterpret_cast<const uint8_t*>(&packet), sizeof(packet));
 
-  Serial.print("esp_now_send result: ");
+  Serial.print("Reading send result: ");
   Serial.println(result == ESP_OK ? "queued" : "failed");
 }
 
@@ -159,15 +236,20 @@ void setup() {
   }
 
   esp_now_register_send_cb(onDataSent);
+  esp_now_register_recv_cb(onDataReceived);
 
   if (!addBroadcastPeer()) {
     enterDeepSleep();
   }
 
   Serial.println("Sender ready");
-  PlantReadingPacket packet = takeReading();
-  sendReading(packet);
-  delay(200);
+
+  if (pingMainNode()) {
+    PlantReadingPacket packet = takeReading();
+    sendReading(packet);
+    delay(200);
+  }
+
   enterDeepSleep();
 }
 
