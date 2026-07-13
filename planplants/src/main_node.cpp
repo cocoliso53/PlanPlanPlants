@@ -3,6 +3,7 @@
 #include <WiFi.h>
 #include <esp_now.h>
 #include <esp_wifi.h>
+#include <time.h>
 
 #include "espnow_common.h"
 
@@ -11,6 +12,9 @@ namespace {
 const char* WIFI_SSID = "INFINITUM7180";
 const char* WIFI_PASSWORD = "4ahxH7gKth";
 const char* API_URL = "http://192.168.1.76:8080/echo";
+const char* NTP_SERVER = "pool.ntp.org";
+constexpr long GMT_OFFSET_SECONDS = 0;
+constexpr int DAYLIGHT_OFFSET_SECONDS = 0;
 constexpr unsigned long UPLOAD_INTERVAL_MILLISECONDS = 3UL * 60UL * 1000UL;
 
 unsigned long lastUploadAt = 0;
@@ -54,6 +58,38 @@ bool ensurePeer(const uint8_t* macAddress) {
   return true;
 }
 
+String currentTimestamp() {
+  time_t now;
+  time(&now);
+
+  if (now <= 0) {
+    return "unsynced";
+  }
+
+  return String(static_cast<unsigned long long>(now));
+}
+
+bool syncClock() {
+  Serial.println("Syncing clock with NTP");
+  configTime(GMT_OFFSET_SECONDS, DAYLIGHT_OFFSET_SECONDS, NTP_SERVER);
+
+  struct tm timeInfo;
+  for (int attempt = 0; attempt < 20; attempt++) {
+    if (getLocalTime(&timeInfo, 500)) {
+      Serial.print("Clock synced unix: ");
+      Serial.println(currentTimestamp());
+      return true;
+    }
+
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println();
+  Serial.println("Failed to sync clock");
+  return false;
+}
+
 void sendReady(const uint8_t* macAddress, uint32_t nodeId) {
   if (!ensurePeer(macAddress)) {
     return;
@@ -88,6 +124,8 @@ void onDataReceived(const uint8_t* macAddress, const uint8_t* incomingData, int 
     memcpy(&hello, incomingData, sizeof(hello));
 
     Serial.println("--- Hello received ---");
+    Serial.print("timestamp: ");
+    Serial.println(currentTimestamp());
     Serial.print("From MAC: ");
     printMacAddress(macAddress);
     Serial.println();
@@ -109,6 +147,8 @@ void onDataReceived(const uint8_t* macAddress, const uint8_t* incomingData, int 
     memcpy(&packet, incomingData, sizeof(packet));
 
     Serial.println("--- Reading received ---");
+    Serial.print("timestamp: ");
+    Serial.println(currentTimestamp());
     Serial.print("From MAC: ");
     printMacAddress(macAddress);
     Serial.println();
@@ -233,6 +273,7 @@ void runUploadCycle() {
   Serial.println("=== Upload cycle start ===");
   stopEspNow();
   connectToWifi();
+  syncClock();
   sendMockRequest();
   disconnectWifi();
   startEspNow();
