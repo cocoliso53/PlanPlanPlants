@@ -54,7 +54,7 @@ type testingLogsSlice struct {
 type echoResponse struct {
 	Status  string              `json:"status"`
 	Params  map[string][]string `json:"params"`
-	Payload testingLogs         `json:"payload"`
+	Payload json.RawMessage     `json:"payload"`
 }
 
 func main() {
@@ -118,7 +118,7 @@ func echoHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var payload testingLogs
+	var payload json.RawMessage
 
 	if err := json.Unmarshal(body, &payload); err != nil {
 		http.Error(w, "invalid json body", http.StatusBadRequest)

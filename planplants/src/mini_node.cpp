@@ -11,6 +11,7 @@
 namespace {
 
 constexpr uint8_t BROADCAST_ADDRESS[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+constexpr uint32_t NODE_ID = 1;
 RTC_DATA_ATTR uint32_t readingCount = 0;
 BH1750 luxSensor;
 bool luxSensorReady = false;
@@ -88,6 +89,8 @@ void onDataReceived(const uint8_t* macAddress, const uint8_t* incomingData, int 
   Serial.println();
   Serial.print("Ready nodeId: ");
   Serial.println(ready.nodeId);
+  Serial.print("secondsUntilWifi: ");
+  Serial.println(ready.secondsUntilWifi);
 }
 
 bool addBroadcastPeer() {
@@ -123,18 +126,14 @@ void initializeSensors() {
   Serial.println(luxSensorReady ? "BH1750 ready" : "BH1750 init failed");
 }
 
-PlantReadingPacket takeReading() {
-  readingCount++;
-
+SensorReading takeSensorReading(uint8_t readingIndex) {
   uint16_t moistureValue = analogRead(MOISTURE_PIN);
   float luxValue = luxSensorReady ? luxSensor.readLightLevel() : -1.0f;
   uint16_t batteryRawValue = analogRead(BATTERY_PIN);
 
   Serial.println("--- Reading sensors ---");
-  Serial.print("nodeId: ");
-  Serial.println(TEST_NODE_ID);
-  Serial.print("readingCount: ");
-  Serial.println(readingCount);
+  Serial.print("readingIndex: ");
+  Serial.println(readingIndex);
   Serial.print("moistureValue: ");
   Serial.println(moistureValue);
   Serial.print("luxValue: ");
@@ -143,14 +142,35 @@ PlantReadingPacket takeReading() {
   Serial.println(batteryRawValue);
 
   return {
-    PACKET_TYPE_READING,
-    TEST_NODE_ID,
-    readingCount,
-    static_cast<uint32_t>(millis()),
     moistureValue,
     luxValue,
     batteryRawValue
   };
+}
+
+PlantReadingBatchPacket takeReadingBatch() {
+  readingCount++;
+
+  PlantReadingBatchPacket batch = {
+    PACKET_TYPE_READING_BATCH,
+    NODE_ID,
+    READINGS_PER_BATCH,
+    {}
+  };
+
+  Serial.println("--- Reading batch ---");
+  Serial.print("nodeId: ");
+  Serial.println(NODE_ID);
+
+  for (uint8_t i = 0; i < READINGS_PER_BATCH; i++) {
+    batch.readings[i] = takeSensorReading(i);
+
+    if (i + 1 < READINGS_PER_BATCH) {
+      delay(BATCH_READING_INTERVAL_MILLISECONDS);
+    }
+  }
+
+  return batch;
 }
 
 bool waitForReady() {
@@ -159,7 +179,18 @@ bool waitForReady() {
   while (millis() - startedAt < HANDSHAKE_WAIT_MILLISECONDS) {
     if (readyReceived) {
       readyReceived = false;
-      return lastReady.nodeId == TEST_NODE_ID;
+
+      if (lastReady.nodeId != NODE_ID) {
+        Serial.println("Ready response nodeId did not match");
+        return false;
+      }
+
+      if (lastReady.secondsUntilWifi < MIN_SECONDS_BEFORE_WIFI_SEND) {
+        Serial.println("Skipping readings because WiFi window is too close");
+        return false;
+      }
+
+      return true;
     }
 
     delay(10);
@@ -171,7 +202,7 @@ bool waitForReady() {
 bool pingMainNode() {
   HelloPacket hello = {
     PACKET_TYPE_HELLO,
-    TEST_NODE_ID
+    NODE_ID
   };
 
   readyReceived = false;
@@ -193,10 +224,10 @@ bool pingMainNode() {
   return false;
 }
 
-void sendReading(const PlantReadingPacket& packet) {
-  esp_err_t result = esp_now_send(BROADCAST_ADDRESS, reinterpret_cast<const uint8_t*>(&packet), sizeof(packet));
+void sendReadingBatch(const PlantReadingBatchPacket& batch) {
+  esp_err_t result = esp_now_send(BROADCAST_ADDRESS, reinterpret_cast<const uint8_t*>(&batch), sizeof(batch));
 
-  Serial.print("Reading send result: ");
+  Serial.print("Reading batch send result: ");
   Serial.println(result == ESP_OK ? "queued" : "failed");
 }
 
@@ -245,8 +276,8 @@ void setup() {
   Serial.println("Sender ready");
 
   if (pingMainNode()) {
-    PlantReadingPacket packet = takeReading();
-    sendReading(packet);
+    PlantReadingBatchPacket batch = takeReadingBatch();
+    sendReadingBatch(batch);
     delay(200);
   }
 

@@ -9,16 +9,25 @@
 
 namespace {
 
-const char* WIFI_SSID = "INFINITUM7180";
-const char* WIFI_PASSWORD = "4ahxH7gKth";
+const char* WIFI_SSID = "";
+const char* WIFI_PASSWORD = "";
 const char* API_URL = "http://192.168.1.76:8080/echo";
 const char* NTP_SERVER = "pool.ntp.org";
 constexpr long GMT_OFFSET_SECONDS = 0;
 constexpr int DAYLIGHT_OFFSET_SECONDS = 0;
 constexpr unsigned long UPLOAD_INTERVAL_MILLISECONDS = 3UL * 60UL * 1000UL;
+constexpr uint8_t MAX_BUFFERED_BATCHES = 8;
+
+struct BufferedBatch {
+  uint32_t timestamp;
+  PlantReadingBatchPacket batch;
+};
 
 unsigned long lastUploadAt = 0;
 bool espNowReady = false;
+BufferedBatch bufferedBatches[MAX_BUFFERED_BATCHES];
+uint8_t bufferedBatchCount = 0;
+uint32_t droppedBatchCount = 0;
 
 void setWifiChannel(uint8_t channel) {
   esp_wifi_set_promiscuous(true);
@@ -58,15 +67,24 @@ bool ensurePeer(const uint8_t* macAddress) {
   return true;
 }
 
-String currentTimestamp() {
+uint32_t currentTimestamp() {
   time_t now;
   time(&now);
 
   if (now <= 0) {
-    return "unsynced";
+    return 0;
   }
 
-  return String(static_cast<unsigned long long>(now));
+  return static_cast<uint32_t>(now);
+}
+
+void printTimestamp(uint32_t timestamp) {
+  if (timestamp == 0) {
+    Serial.println("unsynced");
+    return;
+  }
+
+  Serial.println(timestamp);
 }
 
 bool syncClock() {
@@ -90,19 +108,77 @@ bool syncClock() {
   return false;
 }
 
+uint32_t secondsUntilNextWifi() {
+  unsigned long elapsed = millis() - lastUploadAt;
+
+  if (elapsed >= UPLOAD_INTERVAL_MILLISECONDS) {
+    return 0;
+  }
+
+  unsigned long remaining = UPLOAD_INTERVAL_MILLISECONDS - elapsed;
+  return (remaining + 999) / 1000;
+}
+
 void sendReady(const uint8_t* macAddress, uint32_t nodeId) {
   if (!ensurePeer(macAddress)) {
     return;
   }
 
+  uint32_t secondsUntilWifi = secondsUntilNextWifi();
   ReadyPacket ready = {
     PACKET_TYPE_READY,
-    nodeId
+    nodeId,
+    secondsUntilWifi
   };
+
+  Serial.print("secondsUntilWifi: ");
+  Serial.println(secondsUntilWifi);
 
   esp_err_t result = esp_now_send(macAddress, reinterpret_cast<const uint8_t*>(&ready), sizeof(ready));
   Serial.print("Ready send result: ");
   Serial.println(result == ESP_OK ? "queued" : "failed");
+}
+
+void printBatch(const PlantReadingBatchPacket& batch, uint32_t timestamp) {
+  Serial.println("--- Reading batch received ---");
+  Serial.print("timestamp: ");
+  printTimestamp(timestamp);
+  Serial.print("nodeId: ");
+  Serial.println(batch.nodeId);
+  Serial.print("readingCount: ");
+  Serial.println(batch.readingCount);
+
+  uint8_t count = batch.readingCount;
+  if (count > READINGS_PER_BATCH) {
+    count = READINGS_PER_BATCH;
+  }
+
+  for (uint8_t i = 0; i < count; i++) {
+    Serial.print("readingIndex: ");
+    Serial.println(i);
+    Serial.print("moistureValue: ");
+    Serial.println(batch.readings[i].moistureValue);
+    Serial.print("luxValue: ");
+    Serial.println(batch.readings[i].luxValue);
+    Serial.print("batteryRawValue: ");
+    Serial.println(batch.readings[i].batteryRawValue);
+  }
+}
+
+void bufferBatch(const PlantReadingBatchPacket& batch, uint32_t timestamp) {
+  if (bufferedBatchCount >= MAX_BUFFERED_BATCHES) {
+    droppedBatchCount++;
+    Serial.println("Batch buffer full, dropping batch");
+    Serial.print("droppedBatchCount: ");
+    Serial.println(droppedBatchCount);
+    return;
+  }
+
+  bufferedBatches[bufferedBatchCount] = {timestamp, batch};
+  bufferedBatchCount++;
+
+  Serial.print("Buffered batches: ");
+  Serial.println(bufferedBatchCount);
 }
 
 void onDataReceived(const uint8_t* macAddress, const uint8_t* incomingData, int length) {
@@ -125,7 +201,7 @@ void onDataReceived(const uint8_t* macAddress, const uint8_t* incomingData, int 
 
     Serial.println("--- Hello received ---");
     Serial.print("timestamp: ");
-    Serial.println(currentTimestamp());
+    printTimestamp(currentTimestamp());
     Serial.print("From MAC: ");
     printMacAddress(macAddress);
     Serial.println();
@@ -136,34 +212,22 @@ void onDataReceived(const uint8_t* macAddress, const uint8_t* incomingData, int 
     return;
   }
 
-  if (packetType == PACKET_TYPE_READING) {
-    if (length != sizeof(PlantReadingPacket)) {
-      Serial.print("Ignored reading with unexpected size: ");
+  if (packetType == PACKET_TYPE_READING_BATCH) {
+    if (length != sizeof(PlantReadingBatchPacket)) {
+      Serial.print("Ignored batch with unexpected size: ");
       Serial.println(length);
       return;
     }
 
-    PlantReadingPacket packet;
-    memcpy(&packet, incomingData, sizeof(packet));
+    PlantReadingBatchPacket batch;
+    memcpy(&batch, incomingData, sizeof(batch));
+    uint32_t timestamp = currentTimestamp();
 
-    Serial.println("--- Reading received ---");
-    Serial.print("timestamp: ");
-    Serial.println(currentTimestamp());
     Serial.print("From MAC: ");
     printMacAddress(macAddress);
     Serial.println();
-    Serial.print("nodeId: ");
-    Serial.println(packet.nodeId);
-    Serial.print("readingCount: ");
-    Serial.println(packet.readingCount);
-    Serial.print("uptimeMilliseconds: ");
-    Serial.println(packet.uptimeMilliseconds);
-    Serial.print("moistureValue: ");
-    Serial.println(packet.moistureValue);
-    Serial.print("luxValue: ");
-    Serial.println(packet.luxValue);
-    Serial.print("batteryRawValue: ");
-    Serial.println(packet.batteryRawValue);
+    printBatch(batch, timestamp);
+    bufferBatch(batch, timestamp);
     return;
   }
 
@@ -236,15 +300,54 @@ void disconnectWifi() {
   Serial.println("WiFi disconnected");
 }
 
-void sendMockRequest() {
+String batchToJsonObject(const BufferedBatch& item) {
+  const PlantReadingBatchPacket& batch = item.batch;
+  uint8_t count = batch.readingCount;
+  if (count > READINGS_PER_BATCH) {
+    count = READINGS_PER_BATCH;
+  }
+
+  String json = "{\"nodeId\":" + String(batch.nodeId) +
+                ",\"timestamp\":" + String(item.timestamp) +
+                ",\"readings\":[";
+
+  for (uint8_t i = 0; i < count; i++) {
+    if (i > 0) {
+      json += ",";
+    }
+
+    json += "{\"moistureValue\":" + String(batch.readings[i].moistureValue) +
+            ",\"luxValue\":" + String(batch.readings[i].luxValue, 2) +
+            ",\"batteryRawValue\":" + String(batch.readings[i].batteryRawValue) + "}";
+  }
+
+  json += "]}";
+  return json;
+}
+
+String bufferedBatchesToJson() {
+  String json = "{\"data\":[";
+
+  for (uint8_t i = 0; i < bufferedBatchCount; i++) {
+    if (i > 0) {
+      json += ",";
+    }
+
+    json += batchToJsonObject(bufferedBatches[i]);
+  }
+
+  json += "]}";
+  return json;
+}
+
+bool sendBufferedBatches() {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("WiFi not connected, skipping HTTP send");
-    return;
+    return false;
   }
 
   HTTPClient http;
-  String payload = "{\"nodeId\":999,\"readingCount\":1,\"uptimeMilliseconds\":" + String(millis()) +
-                   ",\"moistureValue\":1234,\"luxValue\":11,\"batteryRawValue\":2048}";
+  String payload = bufferedBatchesToJson();
 
   http.begin(API_URL);
   http.addHeader("Content-Type", "application/json");
@@ -260,13 +363,33 @@ void sendMockRequest() {
   if (responseCode < 0) {
     Serial.print("HTTP error: ");
     Serial.println(http.errorToString(responseCode));
-  } else {
-    String responseBody = http.getString();
-    Serial.print("HTTP response body: ");
-    Serial.println(responseBody);
+    http.end();
+    return false;
   }
 
+  String responseBody = http.getString();
+  Serial.print("HTTP response body: ");
+  Serial.println(responseBody);
   http.end();
+  return responseCode >= 200 && responseCode < 300;
+}
+
+void uploadBufferedBatches() {
+  Serial.print("Buffered batches to upload: ");
+  Serial.println(bufferedBatchCount);
+
+  if (bufferedBatchCount == 0) {
+    return;
+  }
+
+  if (sendBufferedBatches()) {
+    bufferedBatchCount = 0;
+    Serial.println("Buffered batches uploaded and cleared");
+    return;
+  }
+
+  Serial.print("Upload failed, keeping buffered batches: ");
+  Serial.println(bufferedBatchCount);
 }
 
 void runUploadCycle() {
@@ -274,7 +397,7 @@ void runUploadCycle() {
   stopEspNow();
   connectToWifi();
   syncClock();
-  sendMockRequest();
+  uploadBufferedBatches();
   disconnectWifi();
   startEspNow();
   Serial.println("=== Upload cycle end ===");
