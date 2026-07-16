@@ -293,6 +293,10 @@ void setup() {
   Serial.print(" ");
   Serial.println(__TIME__);
 
+  connectToWifi();
+  syncClock();
+  disconnectWifi();
+
   if (startEspNow()) {
     lastUploadAt = millis();
   }
