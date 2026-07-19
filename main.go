@@ -23,34 +23,6 @@ type healthResponse struct {
 
 type ResultReady = bool
 
-const prototypeDeviceID = "prototype"
-
-type testingLogs struct {
-	Moist1       int     `json:"moist1"`
-	Moist2       int     `json:"moist2"`
-	Temp         float64 `json:"temp"`
-	Humidity     float64 `json:"humidity"`
-	Lux1         float64 `json:"lux1"`
-	Lux2         float64 `json:"lux2"`
-	BatteryVolts float64 `json:"batteryPinVoltage"`
-	Timestamp    uint64  `json:"timestamp"`
-}
-
-type testingLogsAvg struct {
-	AvgMoist1       float64 `json:"moist1"`
-	AvgMoist2       float64 `json:"moist2"`
-	AvgTemp         float64 `json:"temp"`
-	AvgHumidity     float64 `json:"humidity"`
-	AvgLux1         float64 `json:"lux1"`
-	AvgLux2         float64 `json:"lux2"`
-	AvgBatteryVolts float64 `json:"batteryPinVoltage"`
-	Timestamp       int64   `json:"timestamp"`
-}
-
-type testingLogsSlice struct {
-	s []testingLogs
-}
-
 type nodeSingleReading struct {
 	Moisture   float64 `json:"moisture"`
 	Lux        float64 `json:"lux"`
@@ -58,8 +30,8 @@ type nodeSingleReading struct {
 }
 
 type nodeBatchReading struct {
-	NodeId    float64             `json:"nodeId"`
-	TimeStamp float64             `json:"timestamp"`
+	NodeID    int64               `json:"nodeId"`
+	Timestamp int64               `json:"timestamp"`
 	Readings  []nodeSingleReading `json:"readings"`
 }
 
@@ -74,9 +46,11 @@ type avgNodeReading struct {
 }
 
 type nodeRow struct {
-	avgNodeReading
-	TimeStamp float64
-	NodeId    float64
+	NodeID     int64   `json:"nodeId"`
+	Timestamp  int64   `json:"timestamp"`
+	Moisture   float64 `json:"moisture"`
+	Lux        float64 `json:"lux"`
+	BatteryRaw float64 `json:"batteryRaw"`
 }
 
 type echoResponse struct {
@@ -87,9 +61,6 @@ type echoResponse struct {
 
 func main() {
 	addr := ":8080"
-	readings := testingLogsSlice{
-		s: make([]testingLogs, 0, 5),
-	}
 	db, err := sql.Open("sqlite", "data/planplants.db")
 	if err != nil {
 		log.Fatal(err)
@@ -212,58 +183,81 @@ func averageReadingsDataHandler(db *sql.DB, w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	storedRows := make([]nodeRow, 0, len(batches.Data))
+
 	for _, item := range batches.Data {
 		result, ready := averageBatchReadings(item.Readings)
-		if ready {
-			if _, err := db.Exec(
-				`INSERT INTO average_readings (nodeId, timestamp, moisture, lux, batteryPinVoltage) VALUES (?, ?, ?, ?, ?)`,
-				item.NodeId,
-				item.TimeStamp,
-				result.AvgMoisture,
-				result.AvgLux,
-				result.AvgBatteryRaw,
-			); err != nil {
-				http.Error(w, "failed to store average reading", http.StatusInternalServerError)
-				return
-			}
-			writeJSON(w, http.StatusCreated,
-				nodeRow{
-					result,
-					item.NodeId,
-					item.TimeStamp,
-				},
-			)
-		} else {
-			w.WriteHeader(http.StatusNoContent)
+		if !ready {
+			continue
 		}
+
+		row := nodeRow{
+			NodeID:     item.NodeID,
+			Timestamp:  item.Timestamp,
+			Moisture:   result.AvgMoisture,
+			Lux:        result.AvgLux,
+			BatteryRaw: result.AvgBatteryRaw,
+		}
+
+		if _, err := db.Exec(
+			`INSERT INTO average_readings (nodeId, timestamp, moisture, lux, batteryRaw) VALUES (?, ?, ?, ?, ?)`,
+			row.NodeID,
+			row.Timestamp,
+			row.Moisture,
+			row.Lux,
+			row.BatteryRaw,
+		); err != nil {
+			http.Error(w, "failed to store average reading", http.StatusInternalServerError)
+			return
+		}
+
+		storedRows = append(storedRows, row)
 	}
+
+	if len(storedRows) == 0 {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"stored": storedRows,
+	})
 }
 
 func ensureAverageReadingsTable(db *sql.DB) error {
-	if _, err := db.Exec(`
-		CREATE TABLE IF NOT EXISTS average_readings (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			moist1 REAL NOT NULL,
-			moist2 REAL NOT NULL DEFAULT 0,
-			temp REAL NOT NULL,
-			humidity REAL NOT NULL,
-			lux1 REAL NOT NULL DEFAULT 0,
-			lux2 REAL NOT NULL DEFAULT 0,
-			batteryPinVoltage REAL NOT NULL DEFAULT 0,
-			deviceId TEXT NOT NULL DEFAULT 'prototype',
-			timestamp INTEGER NOT NULL
-		)
-	`); err != nil {
-		return err
-	}
-
-	rows, err := db.Query(`PRAGMA table_info(average_readings)`)
+	matches, err := averageReadingsTableMatchesSchema(db)
 	if err != nil {
 		return err
 	}
+
+	if !matches {
+		log.Println("resetting average_readings table for node batch schema")
+		if _, err := db.Exec(`DROP TABLE IF EXISTS average_readings`); err != nil {
+			return err
+		}
+	}
+
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS average_readings (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			nodeId INTEGER NOT NULL,
+			timestamp INTEGER NOT NULL,
+			moisture REAL NOT NULL,
+			lux REAL NOT NULL,
+			batteryRaw REAL NOT NULL
+		)
+	`)
+	return err
+}
+
+func averageReadingsTableMatchesSchema(db *sql.DB) (bool, error) {
+	rows, err := db.Query(`PRAGMA table_info(average_readings)`)
+	if err != nil {
+		return false, err
+	}
 	defer rows.Close()
 
-	columns := make(map[string]bool)
+	columns := make(map[string]string)
 	for rows.Next() {
 		var (
 			cid       int
@@ -274,44 +268,38 @@ func ensureAverageReadingsTable(db *sql.DB) error {
 			pk        int
 		)
 		if err := rows.Scan(&cid, &name, &fieldType, &notNull, &defaultV, &pk); err != nil {
-			return err
+			return false, err
 		}
-		columns[name] = true
+		columns[name] = strings.ToUpper(fieldType)
 	}
-
 	if err := rows.Err(); err != nil {
-		return err
+		return false, err
 	}
 
-	if !columns["moist2"] {
-		if _, err := db.Exec(`ALTER TABLE average_readings ADD COLUMN moist2 REAL NOT NULL DEFAULT 0`); err != nil {
-			return err
-		}
-	}
-	if !columns["lux1"] {
-		if _, err := db.Exec(`ALTER TABLE average_readings ADD COLUMN lux1 REAL NOT NULL DEFAULT 0`); err != nil {
-			return err
-		}
-	}
-	if !columns["lux2"] {
-		if _, err := db.Exec(`ALTER TABLE average_readings ADD COLUMN lux2 REAL NOT NULL DEFAULT 0`); err != nil {
-			return err
-		}
+	if len(columns) == 0 {
+		return false, nil
 	}
 
-	if !columns["batteryPinVoltage"] {
-		if _, err := db.Exec(`ALTER TABLE average_readings ADD COLUMN batteryPinVoltage REAL NOT NULL DEFAULT 0`); err != nil {
-			return err
-		}
+	required := map[string]string{
+		"id":         "INTEGER",
+		"nodeId":     "INTEGER",
+		"timestamp":  "INTEGER",
+		"moisture":   "REAL",
+		"lux":        "REAL",
+		"batteryRaw": "REAL",
 	}
 
-	if !columns["deviceId"] {
-		if _, err := db.Exec(`ALTER TABLE average_readings ADD COLUMN deviceId TEXT NOT NULL DEFAULT 'prototype'`); err != nil {
-			return err
+	if len(columns) != len(required) {
+		return false, nil
+	}
+
+	for name, fieldType := range required {
+		if columns[name] != fieldType {
+			return false, nil
 		}
 	}
 
-	return nil
+	return true, nil
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
@@ -444,14 +432,14 @@ func telegramCommandResponse(db *sql.DB, text string) string {
 		}
 		return message
 	case "/start", "/help":
-		return "Available commands:\n/latets - show latest 5 readings"
+		return "Available commands:\n/latest - show latest 5 readings"
 	default:
 		return ""
 	}
 }
 
 func latestReadingsMessage(db *sql.DB, limit int) (string, error) {
-	rows, err := db.Query("SELECT * FROM average_readings ORDER BY timestamp DESC LIMIT ?", limit)
+	rows, err := db.Query("SELECT nodeId, timestamp, moisture, lux, batteryRaw FROM average_readings ORDER BY timestamp DESC LIMIT ?", limit)
 	if err != nil {
 		return "", err
 	}
