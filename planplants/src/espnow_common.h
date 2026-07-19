@@ -10,7 +10,7 @@ constexpr uint8_t SDA_PIN = 8;
 constexpr uint8_t SCL_PIN = 9;
 constexpr uint8_t LUX_SENSOR_ADDRESS = 0x23;
 constexpr uint32_t HANDSHAKE_WAIT_MILLISECONDS = 750;
-constexpr uint32_t MIN_SECONDS_BEFORE_WIFI_SEND = 30;
+constexpr uint32_t MIN_SECONDS_BEFORE_WIFI_SEND = 10;
 constexpr uint8_t READINGS_PER_BATCH = 5;
 constexpr uint32_t BATCH_READING_INTERVAL_MILLISECONDS = 1000;
 

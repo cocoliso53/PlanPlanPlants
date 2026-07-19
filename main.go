@@ -51,6 +51,34 @@ type testingLogsSlice struct {
 	s []testingLogs
 }
 
+type nodeSingleReading struct {
+	Moisture   float64 `json:"moisture"`
+	Lux        float64 `json:"lux"`
+	BatteryRaw float64 `json:"batteryRaw"`
+}
+
+type nodeBatchReading struct {
+	NodeId    float64             `json:"nodeId"`
+	TimeStamp float64             `json:"timestamp"`
+	Readings  []nodeSingleReading `json:"readings"`
+}
+
+type nodeData struct {
+	Data []nodeBatchReading `json:"data"`
+}
+
+type avgNodeReading struct {
+	AvgMoisture   float64
+	AvgLux        float64
+	AvgBatteryRaw float64
+}
+
+type nodeRow struct {
+	avgNodeReading
+	TimeStamp float64
+	NodeId    float64
+}
+
 type echoResponse struct {
 	Status  string              `json:"status"`
 	Params  map[string][]string `json:"params"`
@@ -85,7 +113,7 @@ func main() {
 	mux.HandleFunc("/health", healthHandler)
 	mux.HandleFunc("/echo", echoHandler)
 	mux.HandleFunc("/readings", func(w http.ResponseWriter, r *http.Request) {
-		averageReadingsDataHandler(db, &readings, w, r)
+		averageReadingsDataHandler(db, w, r)
 	})
 
 	server := &http.Server{
@@ -140,50 +168,30 @@ func echoHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (r *testingLogsSlice) averageReadingData(latestReading testingLogs) (testingLogsAvg, ResultReady) {
-	// let's take the average of 5 readings
-	maxLen := 5.0
+func averageBatchReadings(batchReading []nodeSingleReading) (avgNodeReading, ResultReady) {
+	var sumMoist float64
+	var sumLux float64
+	var sumBatteryRaw float64
+	var lenReadings = len(batchReading)
 
-	r.s = append(r.s, latestReading)
-
-	if len(r.s) == int(maxLen) {
-		var avgMoist1 float64
-		var avgMoist2 float64
-		var avgTemp float64
-		var avgHumidity float64
-		var avgLux1 float64
-		var avgLux2 float64
-		var avgBatteryVolts float64
-
-		for _, item := range r.s {
-			avgMoist1 += float64(item.Moist1)
-			avgMoist2 += float64(item.Moist2)
-			avgTemp += item.Temp
-			avgHumidity += item.Humidity
-			avgLux1 += item.Lux1
-			avgLux2 += item.Lux2
-			avgBatteryVolts += item.BatteryVolts
+	if lenReadings > 0 {
+		for _, item := range batchReading {
+			sumMoist += item.Moisture
+			sumLux += item.Lux
+			sumBatteryRaw += item.BatteryRaw
 		}
 
-		// reset to empty slice
-		r.s = r.s[:0]
-
-		return testingLogsAvg{
-			AvgMoist1:       avgMoist1 / maxLen,
-			AvgMoist2:       avgMoist2 / maxLen,
-			AvgTemp:         avgTemp / maxLen,
-			AvgHumidity:     avgHumidity / maxLen,
-			AvgLux1:         avgLux1 / maxLen,
-			AvgLux2:         avgLux2 / maxLen,
-			AvgBatteryVolts: avgBatteryVolts / maxLen,
-			Timestamp:       time.Now().Unix(),
+		return avgNodeReading{
+			AvgMoisture:   sumMoist / float64(lenReadings),
+			AvgLux:        sumLux / float64(lenReadings),
+			AvgBatteryRaw: sumBatteryRaw / float64(lenReadings),
 		}, true
 	} else {
-		return testingLogsAvg{}, false
+		return avgNodeReading{}, false
 	}
 }
 
-func averageReadingsDataHandler(db *sql.DB, readings *testingLogsSlice, w http.ResponseWriter, r *http.Request) {
+func averageReadingsDataHandler(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
@@ -197,35 +205,38 @@ func averageReadingsDataHandler(db *sql.DB, readings *testingLogsSlice, w http.R
 		return
 	}
 
-	var reading testingLogs
+	var batches nodeData
 
-	if err := json.Unmarshal(body, &reading); err != nil {
+	if err := json.Unmarshal(body, &batches); err != nil {
 		http.Error(w, "invalid json body", http.StatusBadRequest)
 		return
 	}
 
-	result, ready := readings.averageReadingData(reading)
-	if ready {
-		if _, err := db.Exec(
-			`INSERT INTO average_readings (moist1, moist2, temp, humidity, lux1, lux2, batteryPinVoltage, deviceId, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			result.AvgMoist1,
-			result.AvgMoist2,
-			result.AvgTemp,
-			result.AvgHumidity,
-			result.AvgLux1,
-			result.AvgLux2,
-			result.AvgBatteryVolts,
-			prototypeDeviceID,
-			result.Timestamp,
-		); err != nil {
-			http.Error(w, "failed to store average reading", http.StatusInternalServerError)
-			return
+	for _, item := range batches.Data {
+		result, ready := averageBatchReadings(item.Readings)
+		if ready {
+			if _, err := db.Exec(
+				`INSERT INTO average_readings (nodeId, timestamp, moisture, lux, batteryPinVoltage) VALUES (?, ?, ?, ?, ?)`,
+				item.NodeId,
+				item.TimeStamp,
+				result.AvgMoisture,
+				result.AvgLux,
+				result.AvgBatteryRaw,
+			); err != nil {
+				http.Error(w, "failed to store average reading", http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, http.StatusCreated,
+				nodeRow{
+					result,
+					item.NodeId,
+					item.TimeStamp,
+				},
+			)
+		} else {
+			w.WriteHeader(http.StatusNoContent)
 		}
-		writeJSON(w, http.StatusCreated, result)
-	} else {
-		w.WriteHeader(http.StatusNoContent)
 	}
-
 }
 
 func ensureAverageReadingsTable(db *sql.DB) error {

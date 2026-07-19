@@ -9,8 +9,8 @@
 
 namespace {
 
-const char* WIFI_SSID = "";
-const char* WIFI_PASSWORD = "";
+const char* WIFI_SSID = "INFINITUM7180";
+const char* WIFI_PASSWORD = "4ahxH7gKth";
 const char* API_URL = "http://192.168.1.76:8080/echo";
 const char* NTP_SERVER = "pool.ntp.org";
 constexpr long GMT_OFFSET_SECONDS = 0;
@@ -316,9 +316,9 @@ String batchToJsonObject(const BufferedBatch& item) {
       json += ",";
     }
 
-    json += "{\"moistureValue\":" + String(batch.readings[i].moistureValue) +
-            ",\"luxValue\":" + String(batch.readings[i].luxValue, 2) +
-            ",\"batteryRawValue\":" + String(batch.readings[i].batteryRawValue) + "}";
+    json += "{\"moisture\":" + String(batch.readings[i].moistureValue) +
+            ",\"lux\":" + String(batch.readings[i].luxValue, 2) +
+            ",\"batteryRaw\":" + String(batch.readings[i].batteryRawValue) + "}";
   }
 
   json += "]}";
@@ -340,14 +340,13 @@ String bufferedBatchesToJson() {
   return json;
 }
 
-bool sendBufferedBatches() {
+bool sendPayload(const String& payload) {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("WiFi not connected, skipping HTTP send");
     return false;
   }
 
   HTTPClient http;
-  String payload = bufferedBatchesToJson();
 
   http.begin(API_URL);
   http.addHeader("Content-Type", "application/json");
@@ -374,11 +373,21 @@ bool sendBufferedBatches() {
   return responseCode >= 200 && responseCode < 300;
 }
 
+bool sendBufferedBatches() {
+  return sendPayload(bufferedBatchesToJson());
+}
+
+bool sendEmptyHeartbeat() {
+  return sendPayload("{\"data\":[]}");
+}
+
 void uploadBufferedBatches() {
   Serial.print("Buffered batches to upload: ");
   Serial.println(bufferedBatchCount);
 
   if (bufferedBatchCount == 0) {
+    Serial.println("No buffered batches, sending empty heartbeat");
+    sendEmptyHeartbeat();
     return;
   }
 

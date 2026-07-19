@@ -275,10 +275,13 @@ void setup() {
 
   Serial.println("Sender ready");
 
+  PlantReadingBatchPacket batch = takeReadingBatch();
+
   if (pingMainNode()) {
-    PlantReadingBatchPacket batch = takeReadingBatch();
     sendReadingBatch(batch);
     delay(200);
+  } else {
+    Serial.println("Discarding unsent reading batch");
   }
 
   enterDeepSleep();
