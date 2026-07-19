@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -10,118 +11,36 @@ import (
 	"testing"
 )
 
-func TestAverageReadingDataNotReadyBeforeFiveSamples(t *testing.T) {
-	readings := &testingLogsSlice{}
-
-	inputs := []testingLogs{
-		{Moist1: 100, Moist2: 200, Temp: 20.0, Humidity: 40.0, Lux1: 1000.0, Lux2: 2000.0, BatteryVolts: 1.8, Timestamp: 1},
-		{Moist1: 110, Moist2: 210, Temp: 21.0, Humidity: 41.0, Lux1: 1010.0, Lux2: 2010.0, Timestamp: 2},
-		{Moist1: 120, Moist2: 220, Temp: 22.0, Humidity: 42.0, Lux1: 1020.0, Lux2: 2020.0, Timestamp: 3},
-		{Moist1: 130, Moist2: 230, Temp: 23.0, Humidity: 43.0, Lux1: 1030.0, Lux2: 2030.0, Timestamp: 4},
-	}
-
-	for i, input := range inputs {
-		got, ready := readings.averageReadingData(input)
-		if ready {
-			t.Fatalf("call %d: ready = true, want false", i+1)
-		}
-		if got != (testingLogsAvg{}) {
-			t.Fatalf("call %d: got %#v, want zero-value result", i+1, got)
-		}
-	}
-
-	if gotLen := len(readings.s); gotLen != 4 {
-		t.Fatalf("slice length = %d, want 4", gotLen)
-	}
-}
-
-func TestAverageReadingDataReturnsAverageOnFifthSampleAndResets(t *testing.T) {
-	readings := &testingLogsSlice{}
-
-	inputs := []testingLogs{
-		{Moist1: 100, Moist2: 200, Temp: 20.0, Humidity: 40.0, Lux1: 1000.0, Lux2: 2000.0, BatteryVolts: 1.8, Timestamp: 1},
-		{Moist1: 110, Moist2: 210, Temp: 22.0, Humidity: 42.0, Lux1: 1100.0, Lux2: 2100.0, BatteryVolts: 1.9, Timestamp: 2},
-		{Moist1: 120, Moist2: 220, Temp: 24.0, Humidity: 44.0, Lux1: 1200.0, Lux2: 2200.0, BatteryVolts: 2.0, Timestamp: 3},
-		{Moist1: 130, Moist2: 230, Temp: 26.0, Humidity: 46.0, Lux1: 1300.0, Lux2: 2300.0, BatteryVolts: 2.1, Timestamp: 4},
-		{Moist1: 140, Moist2: 240, Temp: 28.0, Humidity: 48.0, Lux1: 1400.0, Lux2: 2400.0, BatteryVolts: 2.2, Timestamp: 5},
-	}
-
-	var got testingLogsAvg
-	var ready bool
-	for _, input := range inputs {
-		got, ready = readings.averageReadingData(input)
-	}
+func TestAverageBatchReadingsReturnsAverage(t *testing.T) {
+	got, ready := averageBatchReadings([]nodeSingleReading{
+		{Moisture: 100, Lux: 10, BatteryRaw: 1000},
+		{Moisture: 110, Lux: 20, BatteryRaw: 1010},
+		{Moisture: 120, Lux: 30, BatteryRaw: 1020},
+		{Moisture: 130, Lux: 40, BatteryRaw: 1030},
+		{Moisture: 140, Lux: 50, BatteryRaw: 1040},
+	})
 
 	if !ready {
-		t.Fatal("ready = false, want true on fifth sample")
+		t.Fatal("ready = false, want true")
 	}
-
-	if got.AvgMoist1 != 120 {
-		t.Fatalf("AvgMoist1 = %v, want 120", got.AvgMoist1)
-	}
-	if got.AvgMoist2 != 220 {
-		t.Fatalf("AvgMoist2 = %v, want 220", got.AvgMoist2)
-	}
-	if got.AvgTemp != 24 {
-		t.Fatalf("AvgTemp = %v, want 24", got.AvgTemp)
-	}
-	if got.AvgHumidity != 44 {
-		t.Fatalf("AvgHumidity = %v, want 44", got.AvgHumidity)
-	}
-	if got.AvgLux1 != 1200 {
-		t.Fatalf("AvgLux1 = %v, want 1200", got.AvgLux1)
-	}
-	if got.AvgLux2 != 2200 {
-		t.Fatalf("AvgLux2 = %v, want 2200", got.AvgLux2)
-	}
-	if got.AvgBatteryVolts != 2.0 {
-		t.Fatalf("AvgBatteryVolts = %v, want 2.0", got.AvgBatteryVolts)
-	}
-
-	if got.Timestamp <= 0 {
-		t.Fatalf("Timestamp = %d, want positive Unix timestamp", got.Timestamp)
-	}
-
-	if gotLen := len(readings.s); gotLen != 0 {
-		t.Fatalf("slice length after reset = %d, want 0", gotLen)
-	}
+	assertFloatEqual(t, got.AvgMoisture, 120)
+	assertFloatEqual(t, got.AvgLux, 30)
+	assertFloatEqual(t, got.AvgBatteryRaw, 1020)
 }
 
-func TestAverageReadingDataStartsNewWindowAfterReset(t *testing.T) {
-	readings := &testingLogsSlice{}
+func TestAverageBatchReadingsNotReadyForEmptyBatch(t *testing.T) {
+	got, ready := averageBatchReadings(nil)
 
-	firstWindow := []testingLogs{
-		{Moist1: 10, Moist2: 20, Temp: 1, Humidity: 11, Lux1: 101, Lux2: 201, Timestamp: 1},
-		{Moist1: 20, Moist2: 30, Temp: 2, Humidity: 12, Lux1: 102, Lux2: 202, Timestamp: 2},
-		{Moist1: 30, Moist2: 40, Temp: 3, Humidity: 13, Lux1: 103, Lux2: 203, Timestamp: 3},
-		{Moist1: 40, Moist2: 50, Temp: 4, Humidity: 14, Lux1: 104, Lux2: 204, Timestamp: 4},
-		{Moist1: 50, Moist2: 60, Temp: 5, Humidity: 15, Lux1: 105, Lux2: 205, Timestamp: 5},
-	}
-
-	for _, input := range firstWindow {
-		readings.averageReadingData(input)
-	}
-
-	got, ready := readings.averageReadingData(testingLogs{
-		Moist1: 200, Moist2: 300, Temp: 30, Humidity: 60, Lux1: 900, Lux2: 1900, Timestamp: 6,
-	})
 	if ready {
-		t.Fatal("ready = true, want false for first sample of new window")
+		t.Fatal("ready = true, want false")
 	}
-	if got != (testingLogsAvg{}) {
+	if got != (avgNodeReading{}) {
 		t.Fatalf("got %#v, want zero-value result", got)
 	}
-	if gotLen := len(readings.s); gotLen != 1 {
-		t.Fatalf("slice length = %d, want 1 after starting new window", gotLen)
-	}
 }
 
-func TestEnsureAverageReadingsTableAddsBatteryPinVoltageColumn(t *testing.T) {
-	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+func TestEnsureAverageReadingsTableResetsOldSchema(t *testing.T) {
+	db := openTestDB(t)
 
 	if _, err := db.Exec(`
 		CREATE TABLE average_readings (
@@ -132,6 +51,7 @@ func TestEnsureAverageReadingsTableAddsBatteryPinVoltageColumn(t *testing.T) {
 			humidity REAL NOT NULL,
 			lux1 REAL NOT NULL DEFAULT 0,
 			lux2 REAL NOT NULL DEFAULT 0,
+			batteryPinVoltage REAL NOT NULL DEFAULT 0,
 			deviceId TEXT NOT NULL DEFAULT 'prototype',
 			timestamp INTEGER NOT NULL
 		)
@@ -143,92 +63,143 @@ func TestEnsureAverageReadingsTableAddsBatteryPinVoltageColumn(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var count int
-	if err := db.QueryRow(
-		`SELECT COUNT(*) FROM pragma_table_info('average_readings') WHERE name = 'batteryPinVoltage'`,
-	).Scan(&count); err != nil {
-		t.Fatal(err)
-	}
-	if count != 1 {
-		t.Fatalf("batteryPinVoltage column count = %d, want 1", count)
+	columns := tableColumns(t, db, "average_readings")
+	wantColumns := []string{"id", "nodeId", "timestamp", "moisture", "lux", "batteryRaw"}
+	if strings.Join(columns, ",") != strings.Join(wantColumns, ",") {
+		t.Fatalf("columns = %v, want %v", columns, wantColumns)
 	}
 }
 
-func TestAverageReadingsDataHandlerStoresBatteryPinVoltage(t *testing.T) {
-	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
+func TestEnsureAverageReadingsTablePreservesNewSchemaRows(t *testing.T) {
+	db := openTestDB(t)
+
+	if err := ensureAverageReadingsTable(db); err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	if _, err := db.Exec(
+		`INSERT INTO average_readings (nodeId, timestamp, moisture, lux, batteryRaw) VALUES (?, ?, ?, ?, ?)`,
+		1,
+		1000,
+		100,
+		20,
+		900,
+	); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := ensureAverageReadingsTable(db); err != nil {
 		t.Fatal(err)
 	}
 
-	readings := &testingLogsSlice{}
-	payload := `{"moist1":100,"moist2":200,"temp":24.5,"humidity":55,"lux1":400,"lux2":450,"batteryPinVoltage":1.95,"timestamp":1}`
-
-	for i := 1; i <= 5; i++ {
-		req := httptest.NewRequest(http.MethodPost, "/readings", strings.NewReader(payload))
-		recorder := httptest.NewRecorder()
-
-		averageReadingsDataHandler(db, readings, recorder, req)
-
-		wantStatus := http.StatusNoContent
-		if i == 5 {
-			wantStatus = http.StatusCreated
-		}
-		if recorder.Code != wantStatus {
-			t.Fatalf("request %d status = %d, want %d", i, recorder.Code, wantStatus)
-		}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM average_readings`).Scan(&count); err != nil {
+		t.Fatal(err)
 	}
+	if count != 1 {
+		t.Fatalf("row count = %d, want 1", count)
+	}
+}
 
-	var batteryPinVoltage float64
-	var deviceID string
-	if err := db.QueryRow(
-		`SELECT batteryPinVoltage, deviceId FROM average_readings`,
-	).Scan(&batteryPinVoltage, &deviceID); err != nil {
+func TestAverageReadingsDataHandlerStoresBatchAverages(t *testing.T) {
+	db := openTestDB(t)
+	if err := ensureAverageReadingsTable(db); err != nil {
 		t.Fatal(err)
 	}
 
-	if math.Abs(batteryPinVoltage-1.95) > 0.0001 {
-		t.Fatalf("batteryPinVoltage = %v, want 1.95", batteryPinVoltage)
+	payload := `{"data":[{"nodeId":1,"timestamp":2000,"readings":[{"moisture":100,"lux":10,"batteryRaw":1000},{"moisture":120,"lux":30,"batteryRaw":1040}]},{"nodeId":2,"timestamp":3000,"readings":[{"moisture":300,"lux":50,"batteryRaw":2000},{"moisture":500,"lux":70,"batteryRaw":2200}]}]}`
+	req := httptest.NewRequest(http.MethodPost, "/readings", strings.NewReader(payload))
+	recorder := httptest.NewRecorder()
+
+	averageReadingsDataHandler(db, recorder, req)
+
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusCreated, recorder.Body.String())
 	}
-	if deviceID != prototypeDeviceID {
-		t.Fatalf("deviceId = %q, want %q", deviceID, prototypeDeviceID)
+
+	var response struct {
+		Stored []nodeRow `json:"stored"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Stored) != 2 {
+		t.Fatalf("stored response length = %d, want 2", len(response.Stored))
+	}
+
+	rows, err := db.Query(`SELECT nodeId, timestamp, moisture, lux, batteryRaw FROM average_readings ORDER BY nodeId`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+
+	var stored []nodeRow
+	for rows.Next() {
+		var row nodeRow
+		if err := rows.Scan(&row.NodeID, &row.Timestamp, &row.Moisture, &row.Lux, &row.BatteryRaw); err != nil {
+			t.Fatal(err)
+		}
+		stored = append(stored, row)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(stored) != 2 {
+		t.Fatalf("stored row count = %d, want 2", len(stored))
+	}
+	assertFloatEqual(t, stored[0].Moisture, 110)
+	assertFloatEqual(t, stored[0].Lux, 20)
+	assertFloatEqual(t, stored[0].BatteryRaw, 1020)
+	assertFloatEqual(t, stored[1].Moisture, 400)
+	assertFloatEqual(t, stored[1].Lux, 60)
+	assertFloatEqual(t, stored[1].BatteryRaw, 2100)
+}
+
+func TestAverageReadingsDataHandlerAcceptsEmptyHeartbeat(t *testing.T) {
+	db := openTestDB(t)
+	if err := ensureAverageReadingsTable(db); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/readings", strings.NewReader(`{"data":[]}`))
+	recorder := httptest.NewRecorder()
+
+	averageReadingsDataHandler(db, recorder, req)
+
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusNoContent)
+	}
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM average_readings`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("row count = %d, want 0", count)
 	}
 }
 
 func TestTelegramLatetsCommandReturnsLatestReadings(t *testing.T) {
-	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
+	db := openTestDB(t)
 	if err := ensureAverageReadingsTable(db); err != nil {
 		t.Fatal(err)
 	}
 
 	for i := 1; i <= 6; i++ {
 		if _, err := db.Exec(
-			`INSERT INTO average_readings (moist1, moist2, temp, humidity, lux1, lux2, batteryPinVoltage, deviceId, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			100+i,
-			200+i,
-			20+i,
-			50+i,
-			10+i,
-			11+i,
-			1.9,
-			prototypeDeviceID,
+			`INSERT INTO average_readings (nodeId, timestamp, moisture, lux, batteryRaw) VALUES (?, ?, ?, ?, ?)`,
+			1,
 			1000+i,
+			100+i,
+			10+i,
+			900+i,
 		); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	got := telegramCommandResponse(db, "/latets")
-	if !strings.Contains(got, "<b>lux1</b>: 12, 13, 14, 15, 16") {
+	if !strings.Contains(got, "<b>moisture</b>: 102, 103, 104, 105, 106") {
 		t.Fatalf("unexpected /latets response:\n%s", got)
 	}
 	if !strings.Contains(got, "<b>timestamp</b>: 1002, 1003, 1004, 1005, 1006") {
@@ -236,5 +207,54 @@ func TestTelegramLatetsCommandReturnsLatestReadings(t *testing.T) {
 	}
 	if strings.Contains(got, "1001") || strings.Contains(got, "<b>id</b>") {
 		t.Fatalf("/latets response should only include latest 5 rows and should skip id:\n%s", got)
+	}
+}
+
+func openTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	return db
+}
+
+func tableColumns(t *testing.T, db *sql.DB, table string) []string {
+	t.Helper()
+
+	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+
+	var columns []string
+	for rows.Next() {
+		var (
+			cid       int
+			name      string
+			fieldType string
+			notNull   int
+			defaultV  sql.NullString
+			pk        int
+		)
+		if err := rows.Scan(&cid, &name, &fieldType, &notNull, &defaultV, &pk); err != nil {
+			t.Fatal(err)
+		}
+		columns = append(columns, name)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return columns
+}
+
+func assertFloatEqual(t *testing.T, got, want float64) {
+	t.Helper()
+
+	if math.Abs(got-want) > 0.0001 {
+		t.Fatalf("got %v, want %v", got, want)
 	}
 }
