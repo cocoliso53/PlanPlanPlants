@@ -3,7 +3,7 @@
 #include <Arduino.h>
 
 constexpr uint8_t ESPNOW_CHANNEL = 1;
-constexpr uint32_t DEEP_SLEEP_SECONDS = 60;
+constexpr uint32_t DEEP_SLEEP_SECONDS = 10UL * 60UL;
 constexpr uint8_t MOISTURE_PIN = 0;
 constexpr uint8_t BATTERY_PIN = 1;
 constexpr uint8_t SDA_PIN = 8;

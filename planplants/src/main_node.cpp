@@ -15,11 +15,11 @@ const char* API_URL = "http://192.168.1.76:8080/readings";
 const char* NTP_SERVER = "pool.ntp.org";
 constexpr long GMT_OFFSET_SECONDS = 0;
 constexpr int DAYLIGHT_OFFSET_SECONDS = 0;
-constexpr unsigned long UPLOAD_INTERVAL_MILLISECONDS = 3UL * 60UL * 1000UL;
+constexpr unsigned long UPLOAD_INTERVAL_MILLISECONDS = 30UL * 60UL * 1000UL;
 constexpr uint8_t MAX_BUFFERED_BATCHES = 8;
 constexpr uint8_t MODE_LED_PIN = 2;
 constexpr uint8_t ACTIVITY_LED_PIN = 4;
-constexpr unsigned long ESPNOW_LED_BLINK_INTERVAL_MILLISECONDS = 5000;
+constexpr unsigned long ESPNOW_LED_BLINK_INTERVAL_MILLISECONDS = 60UL * 1000UL;
 constexpr unsigned long ESPNOW_LED_PULSE_MILLISECONDS = 150;
 constexpr unsigned long ACTIVITY_LED_BLINK_INTERVAL_MILLISECONDS = 120;
 
