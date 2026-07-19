@@ -126,10 +126,9 @@ func echoHandler(w http.ResponseWriter, r *http.Request) {
 
 	params := r.URL.Query()
 	log.Printf(
-		"echo request params=%v payload=%+v raw=%s",
+		"echo request params=%v payload=%s",
 		params,
 		payload,
-		string(body),
 	)
 
 	writeJSON(w, http.StatusOK, echoResponse{

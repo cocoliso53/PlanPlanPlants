@@ -9,25 +9,120 @@
 
 namespace {
 
-const char* WIFI_SSID = "INFINITUM7180";
-const char* WIFI_PASSWORD = "4ahxH7gKth";
-const char* API_URL = "http://192.168.1.76:8080/echo";
+const char* WIFI_SSID = "";
+const char* WIFI_PASSWORD = "";
+const char* API_URL = "http://192.168.1.76:8080/readings";
 const char* NTP_SERVER = "pool.ntp.org";
 constexpr long GMT_OFFSET_SECONDS = 0;
 constexpr int DAYLIGHT_OFFSET_SECONDS = 0;
 constexpr unsigned long UPLOAD_INTERVAL_MILLISECONDS = 3UL * 60UL * 1000UL;
 constexpr uint8_t MAX_BUFFERED_BATCHES = 8;
+constexpr uint8_t MODE_LED_PIN = 2;
+constexpr uint8_t ACTIVITY_LED_PIN = 4;
+constexpr unsigned long ESPNOW_LED_BLINK_INTERVAL_MILLISECONDS = 5000;
+constexpr unsigned long ESPNOW_LED_PULSE_MILLISECONDS = 150;
+constexpr unsigned long ACTIVITY_LED_BLINK_INTERVAL_MILLISECONDS = 120;
 
 struct BufferedBatch {
   uint32_t timestamp;
   PlantReadingBatchPacket batch;
 };
 
+enum class ModeLedMode {
+  Off,
+  EspNow,
+  Wifi,
+};
+
 unsigned long lastUploadAt = 0;
 bool espNowReady = false;
+ModeLedMode modeLedMode = ModeLedMode::Off;
+unsigned long lastEspNowLedChangeAt = 0;
+bool espNowLedPulseOn = false;
+unsigned long lastActivityLedChangeAt = 0;
+uint8_t activityLedRemainingTransitions = 0;
+bool activityLedOn = false;
 BufferedBatch bufferedBatches[MAX_BUFFERED_BATCHES];
 uint8_t bufferedBatchCount = 0;
 uint32_t droppedBatchCount = 0;
+
+void writeModeLed(bool on) {
+  digitalWrite(MODE_LED_PIN, on ? HIGH : LOW);
+}
+
+void setModeLedMode(ModeLedMode mode) {
+  modeLedMode = mode;
+  lastEspNowLedChangeAt = millis();
+  espNowLedPulseOn = false;
+
+  if (mode == ModeLedMode::Wifi) {
+    writeModeLed(true);
+    return;
+  }
+
+  writeModeLed(false);
+}
+
+void updateModeLed() {
+  if (modeLedMode != ModeLedMode::EspNow) {
+    return;
+  }
+
+  unsigned long now = millis();
+
+  if (espNowLedPulseOn) {
+    if (now - lastEspNowLedChangeAt >= ESPNOW_LED_PULSE_MILLISECONDS) {
+      espNowLedPulseOn = false;
+      lastEspNowLedChangeAt = now;
+      writeModeLed(false);
+    }
+    return;
+  }
+
+  if (now - lastEspNowLedChangeAt >= ESPNOW_LED_BLINK_INTERVAL_MILLISECONDS) {
+    espNowLedPulseOn = true;
+    lastEspNowLedChangeAt = now;
+    writeModeLed(true);
+  }
+}
+
+void writeActivityLed(bool on) {
+  digitalWrite(ACTIVITY_LED_PIN, on ? HIGH : LOW);
+}
+
+void triggerActivityBlinkPattern(uint8_t blinkCount) {
+  if (blinkCount == 0) {
+    return;
+  }
+
+  activityLedOn = true;
+  activityLedRemainingTransitions = (blinkCount * 2) - 1;
+  lastActivityLedChangeAt = millis();
+  writeActivityLed(true);
+}
+
+void updateActivityLed() {
+  if (activityLedRemainingTransitions == 0) {
+    return;
+  }
+
+  unsigned long now = millis();
+  if (now - lastActivityLedChangeAt < ACTIVITY_LED_BLINK_INTERVAL_MILLISECONDS) {
+    return;
+  }
+
+  activityLedOn = !activityLedOn;
+  activityLedRemainingTransitions--;
+  lastActivityLedChangeAt = now;
+  writeActivityLed(activityLedOn);
+}
+
+void completeActivityBlinkPattern() {
+  while (activityLedRemainingTransitions > 0) {
+    updateActivityLed();
+    delay(10);
+  }
+}
 
 void setWifiChannel(uint8_t channel) {
   esp_wifi_set_promiscuous(true);
@@ -227,6 +322,7 @@ void onDataReceived(const uint8_t* macAddress, const uint8_t* incomingData, int 
     printMacAddress(macAddress);
     Serial.println();
     printBatch(batch, timestamp);
+    triggerActivityBlinkPattern(3);
     bufferBatch(batch, timestamp);
     return;
   }
@@ -236,6 +332,7 @@ void onDataReceived(const uint8_t* macAddress, const uint8_t* incomingData, int 
 }
 
 bool startEspNow() {
+  setModeLedMode(ModeLedMode::Off);
   Serial.println("Starting ESP-NOW setup");
   Serial.println("Setting WiFi STA mode");
   WiFi.mode(WIFI_STA);
@@ -262,10 +359,12 @@ bool startEspNow() {
   Serial.print("ESP-NOW channel: ");
   Serial.println(ESPNOW_CHANNEL);
   Serial.println("Receiver ready");
+  setModeLedMode(ModeLedMode::EspNow);
   return true;
 }
 
 void stopEspNow() {
+  setModeLedMode(ModeLedMode::Off);
   if (!espNowReady) {
     return;
   }
@@ -276,6 +375,7 @@ void stopEspNow() {
 }
 
 void connectToWifi() {
+  setModeLedMode(ModeLedMode::Off);
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
@@ -292,9 +392,11 @@ void connectToWifi() {
   Serial.println(WiFi.localIP());
   Serial.print("WiFi channel: ");
   Serial.println(WiFi.channel());
+  setModeLedMode(ModeLedMode::Wifi);
 }
 
 void disconnectWifi() {
+  setModeLedMode(ModeLedMode::Off);
   WiFi.disconnect(true, true);
   delay(100);
   Serial.println("WiFi disconnected");
@@ -354,6 +456,8 @@ bool sendPayload(const String& payload) {
   Serial.print("HTTP payload: ");
   Serial.println(payload);
 
+  triggerActivityBlinkPattern(2);
+  completeActivityBlinkPattern();
   int responseCode = http.POST(payload);
 
   Serial.print("HTTP response code: ");
@@ -415,6 +519,11 @@ void runUploadCycle() {
 }  // namespace
 
 void setup() {
+  pinMode(MODE_LED_PIN, OUTPUT);
+  pinMode(ACTIVITY_LED_PIN, OUTPUT);
+  writeActivityLed(false);
+  setModeLedMode(ModeLedMode::Off);
+
   Serial.begin(115200);
   delay(1000);
 
@@ -435,6 +544,9 @@ void setup() {
 }
 
 void loop() {
+  updateModeLed();
+  updateActivityLed();
+
   if (millis() - lastUploadAt >= UPLOAD_INTERVAL_MILLISECONDS) {
     lastUploadAt = millis();
     runUploadCycle();
