@@ -11,7 +11,7 @@ namespace {
 
 const char* WIFI_SSID = "";
 const char* WIFI_PASSWORD = "";
-const char* API_URL = "http://192.168.1.76:8080/readings";
+const char* API_URL = "http://209.38.66.30:8080/readings";
 const char* NTP_SERVER = "pool.ntp.org";
 constexpr long GMT_OFFSET_SECONDS = 0;
 constexpr int DAYLIGHT_OFFSET_SECONDS = 0;
@@ -22,6 +22,11 @@ constexpr uint8_t ACTIVITY_LED_PIN = 4;
 constexpr unsigned long ESPNOW_LED_BLINK_INTERVAL_MILLISECONDS = 60UL * 1000UL;
 constexpr unsigned long ESPNOW_LED_PULSE_MILLISECONDS = 150;
 constexpr unsigned long ACTIVITY_LED_BLINK_INTERVAL_MILLISECONDS = 120;
+constexpr unsigned long WIFI_CONNECT_TIMEOUT_MILLISECONDS = 20000;
+constexpr unsigned long HTTP_CONNECT_TIMEOUT_MILLISECONDS = 5000;
+constexpr unsigned long HTTP_REQUEST_TIMEOUT_MILLISECONDS = 10000;
+constexpr unsigned long NTP_SYNC_TIMEOUT_MILLISECONDS = 5000;
+constexpr unsigned long FAILURE_LED_BLINK_MILLISECONDS = 150;
 
 struct BufferedBatch {
   uint32_t timestamp;
@@ -45,6 +50,7 @@ bool activityLedOn = false;
 BufferedBatch bufferedBatches[MAX_BUFFERED_BATCHES];
 uint8_t bufferedBatchCount = 0;
 uint32_t droppedBatchCount = 0;
+bool clockSynced = false;
 
 void writeModeLed(bool on) {
   digitalWrite(MODE_LED_PIN, on ? HIGH : LOW);
@@ -117,10 +123,32 @@ void updateActivityLed() {
   writeActivityLed(activityLedOn);
 }
 
+void resetActivityLed() {
+  activityLedRemainingTransitions = 0;
+  activityLedOn = false;
+  writeActivityLed(false);
+}
+
 void completeActivityBlinkPattern() {
   while (activityLedRemainingTransitions > 0) {
     updateActivityLed();
     delay(10);
+  }
+
+  resetActivityLed();
+}
+
+void blinkBothLeds(uint8_t blinkCount) {
+  setModeLedMode(ModeLedMode::Off);
+  resetActivityLed();
+
+  for (uint8_t i = 0; i < blinkCount; i++) {
+    writeModeLed(true);
+    writeActivityLed(true);
+    delay(FAILURE_LED_BLINK_MILLISECONDS);
+    writeModeLed(false);
+    writeActivityLed(false);
+    delay(FAILURE_LED_BLINK_MILLISECONDS);
   }
 }
 
@@ -187,14 +215,17 @@ bool syncClock() {
   configTime(GMT_OFFSET_SECONDS, DAYLIGHT_OFFSET_SECONDS, NTP_SERVER);
 
   struct tm timeInfo;
-  for (int attempt = 0; attempt < 20; attempt++) {
-    if (getLocalTime(&timeInfo, 500)) {
+  unsigned long startedAt = millis();
+
+  while (millis() - startedAt < NTP_SYNC_TIMEOUT_MILLISECONDS) {
+    if (getLocalTime(&timeInfo, 200)) {
+      clockSynced = true;
       Serial.print("Clock synced unix: ");
       Serial.println(currentTimestamp());
       return true;
     }
 
-    delay(500);
+    delay(100);
     Serial.print(".");
   }
 
@@ -374,14 +405,28 @@ void stopEspNow() {
   Serial.println("ESP-NOW stopped");
 }
 
-void connectToWifi() {
+bool connectToWifi() {
   setModeLedMode(ModeLedMode::Off);
+  resetActivityLed();
+  WiFi.disconnect(true, true);
   WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
   Serial.println("=== WiFi mode ===");
   Serial.print("Connecting to WiFi");
+
+  unsigned long startedAt = millis();
   while (WiFi.status() != WL_CONNECTED) {
+    if (millis() - startedAt >= WIFI_CONNECT_TIMEOUT_MILLISECONDS) {
+      Serial.println();
+      Serial.println("WiFi connection timed out");
+      WiFi.disconnect(true, true);
+      WiFi.mode(WIFI_OFF);
+      blinkBothLeds(6);
+      return false;
+    }
+
     delay(500);
     Serial.print(".");
   }
@@ -393,11 +438,14 @@ void connectToWifi() {
   Serial.print("WiFi channel: ");
   Serial.println(WiFi.channel());
   setModeLedMode(ModeLedMode::Wifi);
+  return true;
 }
 
 void disconnectWifi() {
   setModeLedMode(ModeLedMode::Off);
+  resetActivityLed();
   WiFi.disconnect(true, true);
+  WiFi.mode(WIFI_OFF);
   delay(100);
   Serial.println("WiFi disconnected");
 }
@@ -449,8 +497,15 @@ bool sendPayload(const String& payload) {
   }
 
   HTTPClient http;
+  http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MILLISECONDS);
+  http.setTimeout(HTTP_REQUEST_TIMEOUT_MILLISECONDS);
+  http.setReuse(false);
 
-  http.begin(API_URL);
+  if (!http.begin(API_URL)) {
+    Serial.println("HTTP begin failed");
+    return false;
+  }
+
   http.addHeader("Content-Type", "application/json");
 
   Serial.print("HTTP payload: ");
@@ -458,7 +513,9 @@ bool sendPayload(const String& payload) {
 
   triggerActivityBlinkPattern(2);
   completeActivityBlinkPattern();
+  Serial.println("HTTP POST start");
   int responseCode = http.POST(payload);
+  resetActivityLed();
 
   Serial.print("HTTP response code: ");
   Serial.println(responseCode);
@@ -470,9 +527,13 @@ bool sendPayload(const String& payload) {
     return false;
   }
 
-  String responseBody = http.getString();
-  Serial.print("HTTP response body: ");
-  Serial.println(responseBody);
+  int responseSize = http.getSize();
+  if (responseSize > 0) {
+    String responseBody = http.getString();
+    Serial.print("HTTP response body: ");
+    Serial.println(responseBody);
+  }
+
   http.end();
   return responseCode >= 200 && responseCode < 300;
 }
@@ -508,9 +569,16 @@ void uploadBufferedBatches() {
 void runUploadCycle() {
   Serial.println("=== Upload cycle start ===");
   stopEspNow();
-  connectToWifi();
-  syncClock();
-  uploadBufferedBatches();
+
+  if (connectToWifi()) {
+    if (!clockSynced) {
+      syncClock();
+    }
+    uploadBufferedBatches();
+  } else {
+    Serial.println("Skipping upload cycle because WiFi did not connect");
+  }
+
   disconnectWifi();
   startEspNow();
   Serial.println("=== Upload cycle end ===");
@@ -521,7 +589,8 @@ void runUploadCycle() {
 void setup() {
   pinMode(MODE_LED_PIN, OUTPUT);
   pinMode(ACTIVITY_LED_PIN, OUTPUT);
-  writeActivityLed(false);
+  writeModeLed(false);
+  resetActivityLed();
   setModeLedMode(ModeLedMode::Off);
 
   Serial.begin(115200);
@@ -534,8 +603,9 @@ void setup() {
   Serial.print(" ");
   Serial.println(__TIME__);
 
-  connectToWifi();
-  syncClock();
+  if (connectToWifi()) {
+    syncClock();
+  }
   disconnectWifi();
 
   if (startEspNow()) {
