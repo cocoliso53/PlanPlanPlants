@@ -1,5 +1,50 @@
 # PlanPlanPlants
 
+## Node Pinout Mapping
+
+Pin numbers below are GPIO numbers, not physical header positions. These mappings
+match the active `mini_node` and `main_node` PlatformIO environments in
+[planplants/platformio.ini](planplants/platformio.ini).
+
+### Mini Node — ESP32-C3
+
+The `mini_node` environment uses the `esp32-c3-devkitm-1` board target. Sensor pin
+assignments are defined in
+[planplants/src/espnow_common.h](planplants/src/espnow_common.h).
+
+| Connection | ESP32-C3 pin | Firmware constant | Purpose |
+| --- | --- | --- | --- |
+| Soil moisture sensor analog output | GPIO 0 | `MOISTURE_PIN` | Raw soil moisture ADC reading |
+| Battery sensing signal | GPIO 1 | `BATTERY_PIN` | Raw battery ADC reading |
+| BH1750 SDA | GPIO 6 | `SDA_PIN` | I²C data |
+| BH1750 SCL | GPIO 7 | `SCL_PIN` | I²C clock |
+| Both sensors’ GND | GND | — | Connect the soil moisture sensor and BH1750 GND pins here |
+| Both sensors’ VCC | 3V3 | — | Connect the soil moisture sensor and BH1750 VCC pins here |
+
+The BH1750 is configured at I²C address `0x23` (`LUX_SENSOR_ADDRESS`), with its
+ADDR pin connected to GND. The battery input is a sensing signal; the firmware
+does not define the battery voltage-divider circuit or convert the reading to
+volts.
+
+### Main Node — ESP32
+
+The `main_node` environment uses the `esp32dev` board target. LED pin assignments
+are defined in
+[planplants/src/main_node.cpp](planplants/src/main_node.cpp).
+
+| Connection | ESP32 pin | Firmware constant | Purpose |
+| --- | --- | --- | --- |
+| Mode LED | GPIO 2 | `MODE_LED_PIN` | Pulses once per minute while listening over ESP-NOW; stays on when Wi-Fi connects |
+| Activity LED | GPIO 4 | `ACTIVITY_LED_PIN` | Blinks three times when a reading batch arrives and twice before an HTTP upload |
+| External LED ground | GND | — | Common ground for external LEDs |
+
+Both LEDs are active high. Connect each external LED through a current-limiting
+resistor. Both LEDs blink six times if the Wi-Fi connection times out.
+
+The main node receives sensor readings wirelessly over ESP-NOW and forwards them
+over Wi-Fi, so it has no sensor GPIO connections. No signal wires are required
+between the two nodes.
+
 ## Server Deployment
 
 The Go backend runs in one Docker container. SQLite does not need a separate
